@@ -22,22 +22,24 @@
 .LINK  
     
 .EXAMPLE
-    Process the MIB and returns the as array of objects  
     .\Import-MIB.ps1  -Path .\SYNOLOGY-SYSTEM-MIB.mib
-    
+    Process the MIB and returns the as array of objects
+
 .EXAMPLE 
-    Process the MIB and returns the as array of objects. Use OIDrepo file to resolve OIDs 
     .\Import-MIB.ps1  -Path .\SYNOLOGY-SYSTEM-MIB.mib -OIDrepo .\all.oids
-    
+    Process the MIB and returns the as array of objects. Use OIDrepo file to resolve OIDs 
+
 .EXAMPLE
-    Process the MIB and returns the as array of objects. Use OIDrepo file to resolve OIDs and update the same OIDrepo file. 
     .\Import-MIB.ps1  -Path .\SYNOLOGY-SYSTEM-MIB.mib -OIDrepo .\all.oids -UpdateOIDRepo
+    Process the MIB and returns the as array of objects. Use OIDrepo file to resolve OIDs and update the same OIDrepo file. 
+
 .EXAMPLE
-    To get output into CSV file:
     .\Import-MIB.ps1 -Path .\ThreeParMIB.mib -OIDrepo .\all.oids | Export-Csv -Path .\3PAR.csv            
+    To get output into CSV file
+
 .EXAMPLE
-    To get complete output into CSV file:
     .\Import-MIB.ps1 -Path .\ThreeParMIB.mib -OIDrepo .\all.oids | Select-Object objectName,objectType,status,description,objects,ID,parent,OID | Export-Csv -Path .\3PAR.csv            
+    To get complete output into CSV file
 
 #>
 
