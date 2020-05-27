@@ -108,10 +108,10 @@ function Sanitize-MIB-Text($lines) {
             if ($line.indexOf('}')+1 -lt $line.Length) {
               $cleanMIBtext += $line.substring($line.indexOf('}'),$line.Length-$line.indexof('}'))
             }
+          }
           $array = $line
           $status = 'array_processing'
         }
-      }
       }
       else {
         $cleanMIBtext += $line
@@ -146,8 +146,7 @@ function Sanitize-MIB-Text($lines) {
         $array +=" $line"
       }
     }
-    
-  }
+  }  
 
   $lines = @()
   $lines = $cleanMIBtext
@@ -285,6 +284,15 @@ function New-Parse-MIB($tokens) {
       continue
     }
     elseif ($sa_status -eq 'NOTIFICATION-TYPE') {
+      foreach ($ott in $expected_type_tokens) {
+        if ($ott -eq $token) {
+          $sa_status = $token 
+        }
+      }
+      $counter += 1
+      continue
+    }
+    elseif ($sa_status -eq 'TRAP-TYPE') {
       foreach ($ott in $expected_type_tokens) {
         if ($ott -eq $token) {
           $sa_status = $token 
@@ -443,7 +451,7 @@ function New-Parse-MIB($tokens) {
           $object_defval = $object_defval.trim() 
         }
       }
-      if ($sa_status -eq 'OBJECTS' -and $token.startswith('{')) {
+      if ( ($sa_status -eq 'OBJECTS' -or $sa_status -eq 'VARIABLES') -and $token.startswith('{')) {
         $notification_objects = $token
       }
       else {
@@ -469,26 +477,27 @@ function New-Parse-MIB($tokens) {
       continue
     }
     elseif ($sa_status -eq '::=') {
-      if ($token.startswith('{')) {
+      if ($object_type -eq 'TRAP-TYPE') {
+        $ID = $token.trim()
+      }
+      elseif ($token.startswith('{')) {
         $token = $token -replace '{', ''
         $token = $token -replace '}', ''
         $token = $token.trim()
-        if ($object_type -eq 'TRAP-TYPE') {
-          $ID = $ID.trim()
-        }
-        else {
-          ($parent,$ID) = ($token -split " ")
-        }
-        $parent = $parent.trim()
-        $ID = $ID.trim()
-        $objectProperties = @{ objectName = $object_name; objectType = $object_type; objectSyntax = $object_syntax; status = $status; description = $description; objects = $notification_objects; ID = $ID; parent = $parent; OID = "$parent.$ID"; module = $module_name; objectFullName = "$module_name::$object_name" }
-        $object = New-Object psobject -Property $objectProperties
-        $mib += $object
-        $sa_status="init"
-        ($object_name,$object_type,$object_syntax,$status,$description,$objects,$ID,$parent,$object_max_access,$object_units,$object_reference,$object_index,$object_augments,$object_defval,$notification_objects,$parent,$ID) = ("","","","","","","","","","","","","","","","","")
-        $counter += 1
-        continue
+        ($parent,$ID) = ($token -split " ")
       }
+      else {
+        #unexpected
+      }
+      $parent = $parent.trim()
+      $ID = $ID.trim()
+      $objectProperties = @{ objectName = $object_name; objectType = $object_type; objectSyntax = $object_syntax; status = $status; description = $description; objects = $notification_objects; ID = $ID; parent = $parent; OID = "$parent.$ID"; module = $module_name; objectFullName = "$module_name::$object_name" }
+      $object = New-Object psobject -Property $objectProperties
+      $mib += $object
+      $sa_status="init"
+      ($object_name,$object_type,$object_syntax,$status,$description,$objects,$ID,$parent,$object_max_access,$object_units,$object_reference,$object_index,$object_augments,$object_defval,$notification_objects,$parent,$ID) = ("","","","","","","","","","","","","","","","","")
+      $counter += 1
+      continue
     }
     $counter += 1
   }
@@ -885,7 +894,7 @@ function Import-MIB {
     Module Name    : MIB-Processing  
     Author         : Jiri Kindl; kindl_jiri@yahoo.com
     Prerequisite   : PowerShell V2 over Vista and upper.
-    Version        : 20200426
+    Version        : 20200527
     Copyright 2020 - Jiri Kindl
 .LINK  
     
