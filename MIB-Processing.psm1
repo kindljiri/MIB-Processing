@@ -1,274 +1,327 @@
-﻿
-#Recursion function to expand the OID from (and translate into numbers)
-function Get-OID($object, $mib) {
-  #DEBUG
-  #Write-Host $object.objectName
-  $parent_name = $object.parent
-  $parent_object = $mib | where objectName -EQ $parent_name
-  if ($parent_object) {
-    $parentOID = Get-OID $parent_object $mib
-    $OID = $parentOID + '.' + $object.ID
-    #Write-Host  $OID
-    return $OID
-  }
-  else {
-    #Write-Host $object.OID
-    return $object.OID
-  }
-}
-
-function Sanitize-MIB-Text($lines) {
-  $status = 'init'
-  $cleanMIBtext = @()
-  $tokens = @()
-  #Clean the lines, remove comments, parse strings and arrays
+﻿#Input: content of MIB file
+#Output: content of MIB file without comments (and blank lines)
+function Remove-Comments($lines){
+  $linesWithoutComments = @()
+  $sa_state = 'init'
+  $line_counter = 0
+  #start with preprocessing
+  $lines = $lines | where {$_.trim() -ne ''}
+  #remove comments
+  $debugMessage = "STARTING REMOVE-COMMENTS"
+  Write-Debug $debugMessage
   foreach ($line in $lines) {
-    #remove leading and tailing spaces 
-    $line = $line.trim() 
-    #remove duplicate white spaces (replace them with one space)
-    $line = $line -replace '\s+', " "
+   
+    $line_counter = +1
+    $line = $line -replace '\s+', ' '
+
     #unify comments because some stupids are able to use this --- Comment (as -- are opening the comment and next -- on the line are end it's valid comment)
     #ASN.1 comments commence with a pair of adjacent hyphens and end with the next pair of adjacent hyphens or at the end of the line, whichever occurs first.
     #As replace seems to be recursive removing 4 hyphens will remove all 
     $line = $line -replace '-{4}', ''
     #And then replacing 3 with 2
     $line = $line -replace '-{3}', '--'
-    #And then finally
-    #remove comments
-    if ($line.startswith("--")) {
-      if ($line.indexOf("--") -eq $line.lastIndexOf("--")){
-        continue
-      }
-      else {
-        $cleanMIBtext += $line.subString($line.lastIndexOf("--")+2,$line.Length-$line.lastIndexOf("--")-2)
-      }
-    }
-    if ($line -match '--') {
-      if ($line.indexOf("--") -eq $line.lastIndexOf("--")){
-        $cleanMIBtext += $line.subString(0,$line.lastIndexOf("--"))
-        continue
-      }
-      else {
-        $cleanMIBtext += $line.subString(0,$line.lastIndexOf("--"))
-        $cleanMIBtext += $line.subString($line.lastIndexOf("--")+2,$line.Length-$line.lastIndexOf("--")-2)
-        continue
-      }
-    }
-    #lets find and process strings, "arrays" (assignment is special array
-    if ($status -eq 'init'){
-      #processing string
-      if ($line -match '"') {
-        if ($line.indexOf('"') -gt 0) {
-          $cleanMIBtext += $line.substring(0,($line.indexOf('"')))
-          $text = $line.substring($line.indexOf('"'),$line.length-$line.indexOf('"'))
-          if ($text.indexOf('"') -eq $text.lastIndexOf('"')) {
-            $status = 'text_processing'
+    $line = $line -replace '--', ' -- '
+    #And then finally (we have only -- marking beging and end of comment
+    #by adding spaces around I can split based on the '--' and every 
+    $sa_state = 'init'
+    if ($line -match '--' -or $line -match '"') {
+      $tmp=''
+      foreach ($token in $line.split(' ')){
+        Write-Debug $line
+        $debugMessage = "Status=$sa_state,Token=$token,Counter=$line_counter"
+        Write-Debug $debugMessage
+        if ($sa_state -eq 'init') { 
+          if ($token -eq '--'){
+            $sa_state = 'comment_processing'
+            $linesWithoutComments += $tmp.trim()
+            $tmp = ''
+            continue
+          }
+          elseif ($token.startsWith('"')) {
+            $sa_state = 'text_processing'
+            $tmp += " $token"
+            continue
           }
           else {
-            $cleanMIBtext += $text.substring(0,($text.lastIndexOf('"')+1))
-            if ($text.lastIndexOf('"')+1 -lt $text.Length) {
-              $cleanMIBtext += $text.substring($text.lastIndexOf('"'),$text.Length-$text.lastIndexOf('"'))
-            }
-            
+            $tmp += " $token"
+            continue
           }
         }
-        else {
-          if ($line.indexOf('"') -eq $line.lastIndexOf('"')) {
-            $text = $line
-            $status = 'text_processing'
+        elseif ($sa_state -eq 'text_processing') {
+          if ($token.endswith('"')){
+            $sa_state = 'init'
           }
-          else {
-            $cleanMIBtext += $line.substring(0,($line.lastIndexOf('"')+1))
-            if ($line.lastIndexOf('"')+1 -lt $line.Length) {
-              $cleanMIBtext += $line.substring($line.lastIndexOf('"'),$line.Length-$line.lastIndexOf('"'))
-            }
-          }
-          
+          $tmp += " $token"
+          continue
         }
-        
-      }
-      #procesing "array"
-      elseif ($line -match '{') {
-        if ($line.indexOf('{') -gt 0) {
-          $cleanMIBtext += $line.substring(0,($line.indexOf('{')))
-          $array = $line.substring($line.indexOf('{'),$line.Length-$line.indexof('{'))
-          if ($array -match '}') {
-            $cleanMIBtext += $array.substring(0,$array.indexOf('}')+1)
-            if ($array.indexOf('}')+1 -lt $array.Length) {
-              $cleanMIBtext += $array.substring($array.indexOf('}'),$array.Length-$array.indexof('}'))
-            }
+        elseif($sa_state -eq 'comment_processing'){
+          if ($token -eq '--') {
+            $sa_state = 'init'
+            continue
           }
           else {
-            $status = 'array_processing'
+            continue
           }
         }
-        else {
-          if ($line -match '}') {
-            $cleanMIBtext += $line.substring(0,$line.indexOf('}')+1)
-            if ($line.indexOf('}')+1 -lt $line.Length) {
-              $cleanMIBtext += $line.substring($line.indexOf('}'),$line.Length-$line.indexof('}'))
-            }
-          }
-          $array = $line
-          $status = 'array_processing'
-        }
+        else{
+          #unknown state
+        }       
       }
-      else {
-        $cleanMIBtext += $line
+      if ($sa_state -ne 'text_processing') {
+        $sa_state = 'init'
       }
-    }
-    #processing multiline strings
-    elseif ($status -eq 'text_processing') {
-      if ($line -match '"') {
-        if ($line.lastIndexOf('"')+1 -eq $line.length) {
-          $text += $line
-          $cleanMIBtext += $text
-        }
-        else {
-          $text += " " + $line.substring(0,$line.lastIndexOf('"')+1)
-          $cleanMIBtext += $text
-          $cleanMIBtext += $line.substring($line.lastIndexOf('"'),$line.length-$line.lastIndexOf('"'))
-        }
-        $status = 'init'
+      if ($tmp -ne '') {
+        $linesWithoutComments += $tmp.trim()
       }
-      else {
-        $text += " $line"
-      }
-    }
-    #processing multiline array
-    elseif ($status -eq 'array_processing') {
-      if ($line -match '}') {
-        $array += " $line"
-        $status = 'init'
-        $cleanMIBtext += $array
-      }
-      else {
-        $array +=" $line"
-      }
-    }
-  }  
-
-  $lines = @()
-  $lines = $cleanMIBtext
-  $cleanMIBtext = @()
-
-  #One more round of cleaning, left extra spaces and empty lines
-  foreach ($line in $lines) {
-    $line = $line.trim() 
-    #remove duplicate white spaces (replace them with one space)
-    $line = $line -replace '\s+', " "
-    if ($line -eq '') {
       continue
-    }
-    $cleanMIBtext += $line
-  }
-
-  #tokenize: One token per line (string is one line, array is one line)
-  foreach ($line in $cleanMIBtext) {
-    if ($line.startswith('"')) {
-      $tokens += $line
-    }
-    elseif ($line.startswith('{')) {
-      $tokens += $line
     }
     else {
-      $tokens += $line.split()
+      $linesWithoutComments += $line
     }
+  }
+  $linesWithoutComments = $linesWithoutComments | where {$_.trim() -ne ''}
+  $debugMessage = "ENDING REMOVE-COMMENTS"
+  Write-Debug $debugMessage
+  return $linesWithoutComments
+}
+
+#Input: Content of MIB witout comment (use Remove-Comments)
+#Output: MIB Tokens one token per line
+function Get-Tokens($linesWithoutComments) {
+
+  #this expects that re removed comments
+  $tokens = @()
+  $preprocessed_lines = @()
+  $sa_state = 'init'
+  # prepare text to recognize tokens as variables, keywords, arrays and quted text
+  #let's use space as separator
+  #first to make sure we will be able to recognize arrays and quoted string replace all '{' with '{ ' , '}' with ' }' and '"' with ' " '
+  #also make sure we can recognize assignments by replacing '::=' with ' ::= ' because this is also valid: DEFINITIONS::= BEGINS
+  Write-Verbose "Get-Tokens: Tokenizing"
+  foreach ($line in $linesWithoutComments) {
+    $line = $line -replace '{', '{ '
+    $line = $line -replace '}', ' }'
+    $line = $line -replace '"', ' " '
+    $line = $line -replace '::=', ' ::= '
+    #removing duplicat white spaces and spliting will prevent empty tokens 
+    $line = $line -replace '\s+', ' '
+    $preprocessed_lines += $line.split(' ')
+
   }
 
-  $cleanMIBtext = @()
-  $cleanMIBtext = $tokens 
-  $tokens = @()
+  $preprocessed_lines = $preprocessed_lines | where {$_.trim() -ne ''}
   
-  #remove empty lines and extra spaces
-  foreach ($line in $cleanMIBtext) {
-    $line = $line.trim()
-    if ($line -eq '') {
+  foreach ($token in $preprocessed_lines) {
+    $token = $token.trim()
+
+    #skip of empty tokens
+    #if ($token -eq '') {
+    #  continue
+    #}
+
+    #$token.getType()
+    #echo "DEBUG: State=$sa_state,Token=$token,"
+    #as we removed oneline comments we can process following states
+    #array: start with { and ends with }
+    #quoted text: start with " and ends with "
+    if ($sa_state -eq 'init'){
+      if ($token -eq '{') {
+        $array = '{'
+        $sa_state = 'array_processing'
+        continue
+      }
+      elseif ($token -eq '"') {
+        $quoted_text = '"'
+        $sa_state = 'quoted_text_processing'
+        continue
+      }
+      else {
+        $tokens += $token
+        continue
+      }
+    }
+    elseif($sa_state -eq 'array_processing') {
+      if ("$token" -eq '}'){
+        $array += ' }'
+        $sa_state = 'init'
+        $tokens += $array 
+      }
+      else {
+        $array += " $token"
+      }
       continue
     }
-    $tokens += $line
-  }
+    elseif($sa_state -eq 'quoted_text_processing') {
+      if ($token -eq '"') {
+        $quoted_text = $quoted_text.trim() + '"'
+        $sa_state = 'init'
+        $tokens += $quoted_text
+      }
+      else {
+        $quoted_text += "$token "
+      }
+      continue
+    }
+    else {
+      Write-Verbose "Get to undefined state"
+      continue
+    }
+  } 
+
   return $tokens
 }
 
-function New-Parse-MIB($tokens) {
+#Input: MIB tokens (use Get-Tokens)
+#Output: Return MIB as list of powershell objects
+function Parse-MIB($tokens) {
   #based on:
   # rfc2578 - SMIv2
   # rfc1215 - TRAP-TYPE
-  $sa_status="init"
-  ($object_name,$object_type,$object_syntax,$status,$description,$objects,$ID,$parent,$object_max_access,$object_units,$object_reference,$object_index,$object_augments,$object_defval,$notification_objects,$parent,$ID) = ("","","","","","","","","","","","","","","","","")
+  # rfc2579 - TEXTAUL-CONVENTION
+  $sa_status='init'
+  ($object_name,$object_type,$object_syntax,$status,$description,$objects,$ID,$object_max_access,$object_units,$object_reference,$object_index,$object_augments,$object_defval,$notification_objects,$parent,$OID) = ('','','','','','','','','','','','','','','','')
+  $imported_modules=''
   $counter = 0
+  $currently_processing_macro = ''
   $mib = @()
 
+  $debugMessage = "STARTING PARSING"
+  Write-Debug $debugMessage
+  $debugMessage = "Number of objects in mib: " +$mib.Length 
+  Write-Debug $debugMessage
+
   #below is not used yet (will see if I'll use it later
+  $macro_tokens = ('MODULE-IDENTITY','OBJECT-TYPE','NOTIFICATION-TYPE','OBJECT IDENTIFIER','TEXTUAL-CONVENTION')
   $notification_type_tokens = ('OBJECTS','STATUS','DESCRIPTION','REFERENCE','::=')
   $object_type_tokens=('SYNTAX','UNITS','MAX-ACCESS','STATUS','DESCRIPTION','REFERENCE','INDEX','AUGMENTS','DEFVAL','::=')
   $trap_type_tokens = ('ENTERPRISE','VARIABLES','DESCRIPTION','REFERENCE')
+  $textaul_convention_clauses = ('DISPLAY-HINT', 'STATUS', 'DESCRIPTION', 'REFERENCE', 'SYNTAX')
   
-  #below is union of above arrays
-  $expected_type_tokens=('ENTERPRISE','VARIABLES','OBJECTS','SYNTAX','UNITS','MAX-ACCESS','STATUS','DESCRIPTION','REFERENCE','INDEX','AUGMENTS','DEFVAL','::=')
+  #below is union of above arrays + MACRO
+  $expected_type_tokens=('ENTERPRISE','VARIABLES','OBJECTS','SYNTAX','UNITS','MAX-ACCESS','DISPLAY-HINT','STATUS','DESCRIPTION','REFERENCE','INDEX','AUGMENTS','DEFVAL','::=','MACRO','OBJECT-GROUP','NOTIFICATION-GROUP','NOTIFICATIONS')
 
   foreach ($token in $tokens) {
+    $debugMessage = "Currently processing=$currently_processing_macro,Status=$sa_status,Token=$token,Counter=$counter"
+    Write-Debug $debugMessage
     #just for sure
     $token = $token.trim()
-    if ($sa_status -eq "init") {
+    if ($sa_status -eq 'init') {
       if ($token -eq 'BEGIN') {
         if ($tokens[$counter-2]+$tokens[$counter-1]+$token -eq 'DEFINITIONS::=BEGIN') {
           $module_name = $tokens[$counter-3]
         }
       }
-      elseif ($token -eq 'IMPORT') {
-        $sa_status = 'IMPORT'
+      elseif ($token -eq 'IMPORTS') {
+        $currently_processing_macro = $token
+        $sa_status = 'IMPORTS'
+        $imported_modules = '{ '
       }
       elseif ($token -eq 'MODULE-IDENTITY') {
+        $currently_processing_macro = $token
         $sa_status = 'MODULE-IDENTITY'
-        $object_type = "MODULE-IDENTITY"
+        $object_type = 'MODULE-IDENTITY'
         $object_name = $tokens[$counter-1]
       }
       elseif ($token -eq 'IDENTIFIER' -and $tokens[$counter-1] -eq 'OBJECT') {
+        $currently_processing_macro = 'OBJECT IDENTIFIER'
         $sa_status = 'OBJECT IDENTIFIER'
-        $object_type = "OBJECT IDENTIFIER"
+        $object_type = 'OBJECT IDENTIFIER'
+        $object_name = $tokens[$counter-2]
+      }
+      elseif ($token -eq 'TEXTUAL-CONVENTION' -and $tokens[$counter-1] -eq '::=') {
+        $currently_processing_macro = $token
+        $sa_status = $token
+        $object_type = $token
         $object_name = $tokens[$counter-2]
       }
       elseif ($token -eq 'OBJECT-IDENTITY') {
+        $currently_processing_macro = 'OBJECT IDENTIFIER'
         $sa_status = 'OBJECT IDENTIFIER'
-        $object_type = "OBJECT IDENTIFIER"
+        $object_type = 'OBJECT IDENTIFIER'
         $object_name = $tokens[$counter-1]
       }
       elseif ($token -eq 'OBJECT-TYPE') {
-        $sa_status = 'OBJECT-TYPE'
-        $object_type = "OBJECT-TYPE"
+        $currently_processing_macro = $token
+        $sa_status = $token
+        $object_type = $token
+        $object_name = $tokens[$counter-1]
+      }
+      elseif ($token -eq 'OBJECT-GROUP') {
+        $currently_processing_macro = $token
+        $sa_status = $token
+        $object_type = $token
+        $object_name = $tokens[$counter-1]
+      }      
+      elseif ($token -eq 'NOTIFICATION-GROUP') {
+        $currently_processing_macro = $token
+        $sa_status = $token
+        $object_type = $token
         $object_name = $tokens[$counter-1]
       }
       elseif ($token -eq 'NOTIFICATION-TYPE') {
-        $sa_status = 'NOTIFICATION-TYPE'
-        $object_type = "NOTIFICATION-TYPE"
+        $currently_processing_macro = $token
+        $sa_status = $token
+        $object_type = $token
         $object_name = $tokens[$counter-1]
       }
       elseif ($token -eq 'TRAP-TYPE') {
-        $sa_status = 'TRAP-TYPE'
-        $object_type = "TRAP-TYPE"
+        $currently_processing_macro = $token
+        $sa_status = $token
+        $object_type = $token
         $object_name = $tokens[$counter-1]
+      }
+      elseif ($token -eq 'SEQUENCE') {
+        $currently_processing_macro = $token
+        $sa_status = $token
+        $object_type = $token
+        $object_name = $tokens[$counter-2]
       }
       $object_name = $object_name.trim()
       $counter += 1
       continue 
     }
-    elseif ($sa_status -eq 'IMPORT') {
+    elseif ($sa_status -eq 'IMPORTS') {
       if ($token.endswith(';')) {
+        $imported_modules += '}'
+        $imported_modules = $imported_modules -replace ';, }', ' }'
+        $objectProperties = @{ objectName = 'IMPORTS'; objectType = 'IMPORTS'; objectSyntax = 'IMPORTS'; status = $status; description = 'Other modules refered in this module'; objects = $imported_modules; ID = ''; parent = ''; OID = ''; module = $module_name; objectFullName = '' }
+        $object = New-Object psobject -Property $objectProperties
+        $mib += $object
+        $debugMessage = "Creating Object=$object"
+        Write-Debug $debugMessage
+        $debugMessage = "Number of objects in mib: " +$mib.Length 
+        Write-Debug $debugMessage
+        ($object_name,$object_type,$object_syntax,$status,$description,$objects,$ID,$paren) = ('','','','','','','','','','','','','','','','','')
         $sa_status = 'init'
+        $counter += 1
+        continue
+      }
+      elseif ($token -eq 'FROM') {
+        $imported_modules += $tokens[$counter+1] + ', '
+        $counter += 1
+        continue
       }
     } 
     elseif ($sa_status -eq 'MODULE-IDENTITY') {
       if ($token -eq '::=') {
-        $sa_status='::='
+        $sa_status = '::='
+        $counter += 1
+        continue
+      }
+      elseif ($token -eq 'MACRO') {
+        $sa_status = 'MACRO'
         $counter += 1
         continue
       }
     }
     elseif ($sa_status -eq 'OBJECT IDENTIFIER') {
       if ($token -eq '::=') {
-        $sa_status='::='
+        $sa_status = '::='
+        $counter += 1
+        continue
+      }
+      elseif ($token -eq 'MACRO') {
+        $sa_status='MACRO'
         $counter += 1
         continue
       }
@@ -278,6 +331,37 @@ function New-Parse-MIB($tokens) {
       foreach ($ott in $expected_type_tokens) {
         if ($ott -eq $token) {
           $sa_status = $token 
+          break
+        }
+      }
+      $counter += 1
+      continue
+    }
+    elseif ($sa_status -eq 'TEXTUAL-CONVENTION') {
+      foreach ($ott in $expected_type_tokens) {
+        if ($ott -eq $token) {
+          $sa_status = $token 
+          break
+        }
+      }
+      $counter += 1
+      continue
+    }
+    elseif ($sa_status -eq 'NOTIFICATION-GROUP') {
+      foreach ($ott in $expected_type_tokens) {
+        if ($ott -eq $token) {
+          $sa_status = $token
+          break 
+        }
+      }
+      $counter += 1
+      continue
+    }
+    elseif ($sa_status -eq 'OBJECT-GROUP') {
+      foreach ($ott in $expected_type_tokens) {
+        if ($ott -eq $token) {
+          $sa_status = $token
+          break 
         }
       }
       $counter += 1
@@ -287,6 +371,7 @@ function New-Parse-MIB($tokens) {
       foreach ($ott in $expected_type_tokens) {
         if ($ott -eq $token) {
           $sa_status = $token 
+          break
         }
       }
       $counter += 1
@@ -295,7 +380,8 @@ function New-Parse-MIB($tokens) {
     elseif ($sa_status -eq 'TRAP-TYPE') {
       foreach ($ott in $expected_type_tokens) {
         if ($ott -eq $token) {
-          $sa_status = $token 
+          $sa_status = $token
+          break 
         }
       }
       $counter += 1
@@ -305,14 +391,29 @@ function New-Parse-MIB($tokens) {
       foreach ($ott in $expected_type_tokens) {
         if ($ott -eq $token) {
           $sa_status = $token
-          $object_syntax = $object_syntax.trim() 
+          $object_syntax = $object_syntax.trim()
+          break 
         }
+      }
+      if ($currently_processing_macro -eq 'TEXTUAL-CONVENTION' -and ($tokens[$counter+1] -eq '::=' -or $token -eq 'END') ) {
+        $sa_status = 'init'
+        $object_syntax = $object_syntax.trim()
+        $objectProperties = @{ objectName = $object_name; objectType = $object_type; objectSyntax = $object_syntax; status = $status; description = $description; objects = $notification_objects; ID = $ID; parent = $parent; OID = $OID; module = $module_name; objectFullName = "$module_name::$object_name" }
+        $object = New-Object psobject -Property $objectProperties
+        $mib += $object
+        $debugMessage = "Creating Object=$object"
+        Write-Debug $debugMessage
+        $debugMessage = "Number of objects in mib: " +$mib.Length 
+        Write-Debug $debugMessage
+        ($object_name,$object_type,$object_syntax,$status,$description,$objects,$ID,$object_max_access,$object_units,$object_reference,$object_index,$object_augments,$object_defval,$notification_objects,$parent,$OID) = ('','','','','','','','','','','','','','','','')
       }
       if ($sa_status -eq 'SYNTAX') {
         $object_syntax += $token + " "
       }
       else {
         #unexpected token
+        #$debugMessage = "UNEXPECTED STATE"
+        #Write-Debug $debugMessage
       }
       $counter += 1
       continue
@@ -321,7 +422,8 @@ function New-Parse-MIB($tokens) {
       foreach ($ott in $expected_type_tokens) {
         if ($ott -eq $token) {
           $sa_status = $token
-          $object_units = $object_units.trim() 
+          $object_units = $object_units.trim()
+          break 
         }
       }
       if ($sa_status -eq 'UNITS') {
@@ -329,6 +431,8 @@ function New-Parse-MIB($tokens) {
       }
       else {
         #unexpected token
+        #$debugMessage = "UNEXPECTED STATE"
+        #Write-Debug $debugMessage
       }
       $counter += 1
       continue
@@ -337,7 +441,8 @@ function New-Parse-MIB($tokens) {
       foreach ($ott in $expected_type_tokens) {
         if ($ott -eq $token) {
           $sa_status = $token
-          $object_max_access = $object_max_access.trim() 
+          $object_max_access = $object_max_access.trim()
+          break 
         }
       }
       if ($sa_status -eq 'MAX-ACCESS') {
@@ -345,6 +450,8 @@ function New-Parse-MIB($tokens) {
       }
       else {
         #unexpected token
+        #$debugMessage = "UNEXPECTED STATE"
+        #Write-Debug $debugMessage
       }
       $counter += 1
       continue
@@ -353,14 +460,29 @@ function New-Parse-MIB($tokens) {
       foreach ($ott in $expected_type_tokens) {
         if ($ott -eq $token) {
           $sa_status = $token
-          $status = $status.trim() 
+          $status = $status.trim()
+          break 
         }
+      }
+      if ($currently_processing_macro -eq 'TEXTUAL-CONVENTION' -and ($tokens[$counter+1] -eq '::=' -or $token -eq 'END') ) {
+        $sa_status = 'init'
+        $status = $status.trim()
+        $objectProperties = @{ objectName = $object_name; objectType = $object_type; objectSyntax = $object_syntax; status = $status; description = $description; objects = $notification_objects; ID = $ID; parent = $parent; OID = $OID; module = $module_name; objectFullName = "$module_name::$object_name" }
+        $object = New-Object psobject -Property $objectProperties
+        $mib += $object 
+        $debugMessage = "Creating Object=$object"
+        Write-Debug $debugMessage
+        $debugMessage = "Number of objects in mib: " +$mib.Length 
+        Write-Debug $debugMessage
+        ($object_name,$object_type,$object_syntax,$status,$description,$objects,$ID,$object_max_access,$object_units,$object_reference,$object_index,$object_augments,$object_defval,$notification_objects,$parent,$OID) = ('','','','','','','','','','','','','','','','')
       }
       if ($sa_status -eq 'STATUS') {
         $status += $token + " "
       }
       else {
         #unexpected token
+        #$debugMessage = "UNEXPECTED STATE"
+        #Write-Debug $debugMessage
       }
       $counter += 1
       continue
@@ -368,14 +490,28 @@ function New-Parse-MIB($tokens) {
     elseif ($sa_status -eq 'DESCRIPTION') {
       foreach ($ott in $expected_type_tokens) {
         if ($ott -eq $token) {
-          $sa_status = $token 
-        }
+          $sa_status = $token
+          break
+        }  
+      }
+      if ($currently_processing_macro -eq 'TEXTUAL-CONVENTION' -and ($tokens[$counter+1] -eq '::=' -or $token -eq 'END') ) {
+        $sa_status = 'init'
+        $objectProperties = @{ objectName = $object_name; objectType = $object_type; objectSyntax = $object_syntax; status = $status; description = $description; objects = $notification_objects; ID = $ID; parent = $parent; OID = $OID; module = $module_name; objectFullName = "$module_name::$object_name" }
+        $object = New-Object psobject -Property $objectProperties
+        $mib += $object 
+        $debugMessage = "Creating Object=$object"
+        Write-Debug $debugMessage
+        $debugMessage = "Number of objects in mib: " +$mib.Length 
+        Write-Debug $debugMessage
+        ($object_name,$object_type,$object_syntax,$status,$description,$objects,$ID,$object_max_access,$object_units,$object_reference,$object_index,$object_augments,$object_defval,$notification_objects,$parent,$OID) = ('','','','','','','','','','','','','','','','')
       }
       if ($sa_status -eq 'DESCRIPTION' -and $token.startswith('"')) {
         $description = $token
       }
       else {
         #unexpected token
+        #$debugMessage = "UNEXPECTED STATE"
+        #Write-Debug $debugMessage
       }
       $counter += 1
       continue
@@ -384,14 +520,60 @@ function New-Parse-MIB($tokens) {
       foreach ($ott in $expected_type_tokens) {
         if ($ott -eq $token) {
           $sa_status = $token
-          $object_reference = $object_reference.trim() 
+          $object_reference = $object_reference.trim()
+          break  
         }
+      }
+      if ($currently_processing_macro -eq 'TEXTUAL-CONVENTION' -and ($tokens[$counter+1] -eq '::=' -or $token -eq 'END') ) {
+        $sa_status = 'init'
+        $object_reference = $object_reference.trim() 
+        $objectProperties = @{ objectName = $object_name; objectType = $object_type; objectSyntax = $object_syntax; status = $status; description = $description; objects = $notification_objects; ID = $ID; parent = $parent; OID = $OID; module = $module_name; objectFullName = "$module_name::$object_name" }
+        $object = New-Object psobject -Property $objectProperties
+        $mib += $object
+        $debugMessage = "Creating Object=$object"
+        Write-Debug $debugMessage
+        $debugMessage = "Number of objects in mib: " +$mib.Length 
+        Write-Debug $debugMessage
+        ($object_name,$object_type,$object_syntax,$status,$description,$objects,$ID,$object_max_access,$object_units,$object_reference,$object_index,$object_augments,$object_defval,$notification_objects,$parent,$OID) = ('','','','','','','','','','','','','','','','')
       }
       if ($sa_status -eq 'REFERENCE') {
         $object_reference += $token + " "
       }
       else {
         #unexpected token
+        #$debugMessage = "UNEXPECTED STATE"
+        #Write-Debug $debugMessage
+      }
+      $counter += 1
+      continue
+    }
+    elseif ($sa_status -eq 'DISPLAY-HINT') {
+      foreach ($ott in $expected_type_tokens) {
+        if ($ott -eq $token) {
+          $sa_status = $token
+          $display_hint = $display_hint.trim()
+          break 
+        }
+      }
+      if ($currently_processing_macro -eq 'TEXTUAL-CONVENTION' -and ($tokens[$counter+1] -eq '::=' -or $token -eq 'END') ) {
+        $sa_status = 'init'
+        $display_hint = $display_hint.trim()
+        $objectProperties = @{ objectName = $object_name; objectType = $object_type; objectSyntax = $object_syntax; status = $status; description = $description; objects = $notification_objects; ID = $ID; parent = $parent; OID = $OID; module = $module_name; objectFullName = "$module_name::$object_name" }
+        $object = New-Object psobject -Property $objectProperties
+        $mib += $object 
+        $debugMessage = "Creating Object=$object"
+        Write-Debug $debugMessage
+        $debugMessage = "Number of objects in mib: " +$mib.Length 
+        Write-Debug $debugMessage
+        ($object_name,$object_type,$object_syntax,$status,$description,$objects,$ID,$object_max_access,$object_units,$object_reference,$object_index,$object_augments,$object_defval,$notification_objects,$parent,$OID) = ('','','','','','','','','','','','','','','','')
+      }
+      if ($sa_status -eq 'DISPLAY-HINT') {
+        $display_hint += $token + ' '
+      }
+      else {
+        #unexpected token
+        #$debugMessage = "UNEXPECTED STATE"
+        #Write-Debug $debugMessage
       }
       $counter += 1
       continue
@@ -401,6 +583,7 @@ function New-Parse-MIB($tokens) {
         if ($ott -eq $token) {
           $sa_status = $token
           $object_index = $object_index.trim() 
+          break 
         }
       }
       if ($sa_status -eq 'INDEX') {
@@ -408,6 +591,8 @@ function New-Parse-MIB($tokens) {
       }
       else {
         #unexpected token
+        #$debugMessage = "UNEXPECTED STATE"
+        #Write-Debug $debugMessage
       }
       $counter += 1
       continue
@@ -416,7 +601,8 @@ function New-Parse-MIB($tokens) {
       foreach ($ott in $expected_type_tokens) {
         if ($ott -eq $token) {
           $sa_status = $token
-          $object_augments = $object_augments.trim() 
+          $object_augments = $object_augments.trim()
+          break
         }
       }
       if ($sa_status -eq 'AUGMENTS') {
@@ -424,6 +610,8 @@ function New-Parse-MIB($tokens) {
       }
       else {
         #unexpected token
+        #$debugMessage = "UNEXPECTED STATE"
+        #Write-Debug $debugMessage
       }
       $counter += 1
       continue
@@ -432,7 +620,8 @@ function New-Parse-MIB($tokens) {
       foreach ($ott in $expected_type_tokens) {
         if ($ott -eq $token) {
           $sa_status = $token
-          $object_defval = $object_defval.trim() 
+          $object_defval = $object_defval.trim()
+          break 
         }
       }
       if ($sa_status -eq 'DEFVAL') {
@@ -440,22 +629,27 @@ function New-Parse-MIB($tokens) {
       }
       else {
         #unexpected token
+        #$debugMessage = "UNEXPECTED STATE"
+        #Write-Debug $debugMessage
       }
       $counter += 1
       continue
     }
-    elseif ($sa_status -eq 'OBJECTS' -or $sa_status -eq 'VARIABLES') {
+    elseif ($sa_status -eq 'OBJECTS' -or $sa_status -eq 'VARIABLES' -or $sa_status -eq 'NOTIFICATIONS') {
       foreach ($ott in $expected_type_tokens) {
         if ($ott -eq $token) {
           $sa_status = $token
           $object_defval = $object_defval.trim() 
+          break
         }
       }
-      if ( ($sa_status -eq 'OBJECTS' -or $sa_status -eq 'VARIABLES') -and $token.startswith('{')) {
+      if ( ($sa_status -eq 'OBJECTS' -or $sa_status -eq 'VARIABLES' -or $sa_status -eq 'NOTIFICATIONS') -and $token.startswith('{')) {
         $notification_objects = $token
       }
       else {
         #unexpected token
+        #$debugMessage = "UNEXPECTED STATE"
+        #Write-Debug $debugMessage
       }
       $counter += 1
       continue
@@ -464,7 +658,7 @@ function New-Parse-MIB($tokens) {
       foreach ($ott in $expected_type_tokens) {
         if ($ott -eq $token) {
           $sa_status = $token
-          $parent = $parent.trim() 
+          break
         }
       }
       if ($sa_status -eq 'ENTERPRISE') {
@@ -472,6 +666,8 @@ function New-Parse-MIB($tokens) {
       }
       else {
         #unexpected token
+        #$debugMessage = "UNEXPECTED STATE"
+        #Write-Debug $debugMessage
       }
       $counter += 1
       continue
@@ -484,393 +680,129 @@ function New-Parse-MIB($tokens) {
         $token = $token -replace '{', ''
         $token = $token -replace '}', ''
         $token = $token.trim()
-        ($parent,$ID) = ($token -split " ")
+        $nodes = $token -split ' '
+        #because OID assignment can be done as:
+        #{ parent ID }
+        # or
+        #{ <subtree> ID } for example { netapp 0 777 }
+        #we need to check it and separate ID and "parent" accordingly
+        if ($nodes.Count -gt 2) {
+          $ID = $nodes[-1]
+          $ID.trim()
+          foreach ($node in $nodes[0..($nodes.Count - 2)]) {
+            #as there can be also OID assignments like below need to go through all nodes and get just numbers
+            #{ iso(1) member-body(2) us(840) ieee802dot3(10006) snmpmibs(300) 43 } 
+            if ($node -match '\(\d+\)'){
+              $node = $node -replace ".*\(", ''
+              $node = $node -replace "\)", '' 
+            }
+            $parent += $node.trim() + '.'
+          }
+          $parent = $parent.trim('.')
+        }
+        else {
+          ($parent,$ID) = $nodes
+          $parent = $parent.trim()
+          $ID = $ID.trim()
+        }
       }
       else {
         #unexpected
+        $debugMessage = "UNEXPECTED STATE"
+        Write-Debug $debugMessage
+        $sa_status = 'init'
+        $counter += 1
+        continue
       }
-      $parent = $parent.trim()
-      $ID = $ID.trim()
-      $objectProperties = @{ objectName = $object_name; objectType = $object_type; objectSyntax = $object_syntax; status = $status; description = $description; objects = $notification_objects; ID = $ID; parent = $parent; OID = "$parent.$ID"; module = $module_name; objectFullName = "$module_name::$object_name" }
+
+      $OID = $parent + '.' + $ID
+      $objectProperties = @{ objectName = $object_name; objectType = $object_type; objectSyntax = $object_syntax; status = $status; description = $description; objects = $notification_objects; ID = $ID; parent = $parent; OID = $OID; module = $module_name; objectFullName = "$module_name::$object_name" }
       $object = New-Object psobject -Property $objectProperties
       $mib += $object
-      $sa_status="init"
-      ($object_name,$object_type,$object_syntax,$status,$description,$objects,$ID,$parent,$object_max_access,$object_units,$object_reference,$object_index,$object_augments,$object_defval,$notification_objects,$parent,$ID) = ("","","","","","","","","","","","","","","","","")
+      $debugMessage = "Creating Object=$object"
+      Write-Debug $debugMessage
+      $debugMessage = "Number of objects in mib: " +$mib.Length 
+      Write-Debug $debugMessage
+      $sa_status = 'init'
+      ($object_name,$object_type,$object_syntax,$status,$description,$objects,$ID,$object_max_access,$object_units,$object_reference,$object_index,$object_augments,$object_defval,$notification_objects,$parent,$OID) = ('','','','','','','','','','','','','','','','')
       $counter += 1
       continue
     }
-    $counter += 1
-  }
-  return $mib
-}
-
-#Takes the lines from MIB file, and parse them into objects, returns the array of custom objects
-function Old-Parse-MIB($lines) {
-  $sa_status="init"
-  $object_name = ""
-  $object_type = ""
-  $object_syntax = ""
-  $status = ""
-  $description = ""
-  $objects = ""
-  $ID = ""
-  $parent = ""
-
-  $mib = @()
-  
-  Foreach ($line in $lines) {
-    $line = $line.trim() 
-    $line = $line -replace '\s+', " "
-    #"DEBUG: $line"
-    #"DEBUG: $sa_status"
-    #ignore line containings only comment
-    if ($line.startswith("--")) {
+    elseif ($sa_status -eq 'MACRO') {
+      #just skip MACRO DEFINITION
+      if ($token -eq 'END') {
+        $sa_status = 'init'
+      }
+      $counter += 1
       continue
     }
-    elseif ($sa_status -eq "init") {
-      if ($line -cmatch "NOTIFICATION-TYPE"){
-        $sa_status = "process_notification"
-        $object_name = $line -replace "NOTIFICATION-TYPE"
-        $object_name = $object_name.trim()
-        $object_type = "NOTIFICATION-TYPE" 
-        continue
-      }
-      elseif ($line.endswith(' DEFINITIONS ::= BEGIN')) {
-        $module_name = $line -replace ' DEFINITIONS ::= BEGIN'
-        $module_name = $module_name.trim()
-      }
-      elseif ($line -cmatch "IMPORTS") {
-        $sa_status = "process_imports"
-        continue
-      }
-      elseif ($line -cmatch "TRAP-TYPE") {
-        $sa_status = "process_trap"
-        $object_name = $line -replace "TRAP-TYPE"
-        $object_name = $object_name.trim()
-        $object_type = "TRAP-TYPE"
-        continue
-      }
-      elseif ($line -cmatch "OBJECT-TYPE") {
-        $sa_status = "process_object"
-        $line = $line -replace "OBJECT-TYPE"
-        $object_type = 'OBJECT-TYPE'
-        if ($line -match "::=") {
-          $line = $line -replace "::=", ""
-          $line = $line -replace "{", "" 
-          $line = $line -replace "}", ""
-          $line = $line.trim()
-          $line = $line -replace '\s+', " "
-          ($object_name,$parent,$ID)  = ($line -split " ")
-          $objectProperties = @{ objectName = $object_name; objectType = $object_type; objectSyntax = $object_syntax; status = $status; description = $description; objects = $objects; ID = $ID; parent = $parent; OID = "$parent.$ID"; module = $module_name; objectFullName = "$module_name::$object_name" }
-          $object = New-Object psobject -Property $objectProperties
-          $mib += $object
-          $sa_status="init"
-          $object_name = ""
-          $object_type = ""
-          $object_syntax = ""
-          $status = ""
-          $description = ""
-          $objects = ""
-          $ID = ""
-          $parent = ""
-          continue
-        }
-        else {
-          $object_name = $line.trim()
-        }
-        continue
-      } 
-      elseif (($line -cmatch 'OBJECT IDENTIFIER') -or ($line -cmatch 'OBJECT-IDENTITY')) {
-        $sa_status = "process_object_identifier"
-        $line = $line -replace "OBJECT IDENTIFIER", ""
-        $line = $line -replace "OBJECT-IDENTITY", ""
-        $object_type = "OBJECT IDENTIFIER"
-        if ($line -match "::=") {
-          $line = $line -replace "::=", ""
-          $line = $line -replace "{", "" 
-          $line = $line -replace "}", ""
-          $line = $line.trim()
-          $line = $line -replace '\s+', " "
-          ($object_name,$parent,$ID)  = ($line -split " ")
-          $objectProperties = @{ objectName = $object_name; objectType = $object_type; objectSyntax = $object_syntax; status = $status; description = $description; objects = $objects; ID = $ID; parent = $parent; OID = "$parent.$ID"; module = $module_name; objectFullName = "$module_name::$object_name" }
-          $object = New-Object psobject -Property $objectProperties
-          $mib += $object
-          $sa_status="init"
-          $object_name = ""
-          $object_type = ""
-          $object_syntax = ""
-          $status = ""
-          $description = ""
-          $objects = ""
-          $ID = ""
-          $parent = ""
-          continue
-        }
-        else {
-          $object_name = $line.trim()
-        }
-        continue
-      }
-      elseif ($line -cmatch "MODULE-IDENTITY") {
-        $sa_status = "process_module_identity"
-        $line = $line -replace "MODULE-IDENTITY", ""
-        $object_name = $line.trim()
-        $object_type = "MODULE-IDENTITY"
-        continue
-      } 
-    }
-    
-    elseif ($sa_status -eq "process_trap"){
-      if ($line -cmatch "DESCRIPTION"){
-        $description = $description + $line
-        $description = $description -replace "DESCRIPTION", ""
-        $description = $description.trim()
-        if (!($line.EndsWith('"'))){
-          $sa_status = "process_trap_description"
-        }
-        continue
-      }
-      elseif ($line -cmatch "VARIABLES"){
-        $objects = $objects + $line
-        $objects = $objects -replace "VARIABLES", ""
-        $objects = $objects -replace "{", ""
-        $objects = '{' + $objects.trim()
-        if (!($line.EndsWith('}'))){
-          $sa_status = "process_variables"
-        }
-        continue
-      }
-      elseif ($line -cmatch "ENTERPRISE"){
-        $parent = $line -replace "ENTERPRISE", ""
-        $parent = $parent.trim()
-        continue
-      }
-      elseif ($line -Match "::="){
-        $ID = $line -replace "::=", ""
-        $ID = $ID.trim()
-        $OID = "$parent" + "." + "$ID"
-        $objectProperties = @{ objectName = $object_name; objectType = $object_type; objectSyntax = $object_syntax; status = $status; description = $description; objects = $objects; ID = $ID; parent = $parent; OID = "$parent.$ID"; module = $module_name; objectFullName = "$module_name::$object_name" }
+    elseif ($sa_status -eq 'SEQUENCE') {
+      if ($token.startswith('{')){
+        $objectProperties = @{ objectName = $object_name; objectType = $object_type; objectSyntax = 'SEQUENCE'; status = ''; description = ''; objects = $token; ID = ''; parent = ''; OID = ''; module = $module_name; objectFullName = "$module_name::$object_name" }
         $object = New-Object psobject -Property $objectProperties
         $mib += $object
-        $sa_status="init"
-        $object_name = ""
-        $object_type = ""
-        $object_syntax = ""
-        $status = ""
-        $description = ""
-        $objects = ""
-        $ID = ""
-        $parent = ""
-        continue
-      }
-    }
-    elseif ($sa_status -eq "process_object"){
-      if ($line -cmatch "DESCRIPTION"){
-        $description = $description + $line
-        $description = $description -replace "DESCRIPTION", ""
-        $description = $description.trim()
-        if (!($line.EndsWith('"'))){
-          $sa_status = "process_object_description"
-        }
-        continue     
-      }
-      elseif ($line -cmatch "SYNTAX") {
-        $object_syntax = $line -replace "SYNTAX", ""
-        $object_syntax = $object_syntax.trim()
-      }
-      elseif ($line -Match "::="){
-        $parent_and_id = $line -replace "::=", ""
-        $parent_and_id = $parent_and_id -replace "{", "" 
-        $parent_and_id = $parent_and_id -replace "}", ""
-        $parent_and_id = $parent_and_id.trim()
-        ($parent,$ID)  = ($parent_and_id -split " ")
-        $OID = "$parent" + "." + "$ID"
-        $objectProperties = @{ objectName = $object_name; objectType = $object_type; objectSyntax = $object_syntax; status = $status; description = $description; objects = $objects; ID = $ID; parent = $parent; OID = "$parent.$ID"; module = $module_name; objectFullName = "$module_name::$object_name" }
-        $object = New-Object psobject -Property $objectProperties
-        $mib += $object
-        $sa_status="init"
-        $object_name = ""
-        $object_type = ""
-        $object_syntax = ""
-        $status = ""
-        $description = ""
-        $objects = ""
-        $ID = ""
-        $parent = ""
-        continue
-      }
-    }
-    elseif ($sa_status -eq "process_notification"){
-      if ($line -cmatch "DESCRIPTION"){
-        $description = $line -replace "DESCRIPTION", ""
-        $description = $description.trim()
-        if (!($line.EndsWith('"'))){
-          $sa_status = "process_description"
-        }
-        continue
-      }
-      elseif ($line -cmatch "OBJECTS"){
-        $objects = $line -replace "OBJECTS", ""
-        $objects = $objects -replace "{", ""
-        $objects = '{' + $objects.trim()
-        if (!($line.EndsWith('}'))){
-          $sa_status = "process_objects"
-        }
-        continue
-      }
-      elseif ($line -Match "::="){
-        $parent_and_id = $line -replace "::=", ""
-        $parent_and_id = $parent_and_id -replace "{", "" 
-        $parent_and_id = $parent_and_id -replace "}", ""
-        $parent_and_id = $parent_and_id.trim()
-        ($parent,$ID)  = ($parent_and_id -split " ")
-        $OID = "$parent" + "." + "$ID"
-        $objectProperties = @{ objectName = $object_name; objectType = $object_type; objectSyntax = $object_syntax; status = $status; description = $description; objects = $objects; ID = $ID; parent = $parent; OID = "$parent.$ID"; module = $module_name; objectFullName = "$module_name::$object_name" }
-        $object = New-Object psobject -Property $objectProperties
-        $mib += $object
-        $sa_status="init"
-        $object_name = ""
-        $object_type = ""
-        $object_syntax = ""
-        $status = ""
-        $description = ""
-        $objects = ""
-        $ID = ""
-        $parent = ""
-        continue
-      }
-    }
-    elseif ($sa_status -eq "process_description"){
-      if ($line.EndsWith('"')){
-        $description = $description + ' ' + $line
-        $sa_status = "process_notification"
+        $debugMessage = "Creating Object=$object"
+        Write-Debug $debugMessage
+        $debugMessage = "Number of objects in mib: " +$mib.Length 
+        Write-Debug $debugMessage
+        $sa_status = 'init'
+        ($object_name,$object_type,$object_syntax,$status,$description,$objects,$ID,$object_max_access,$object_units,$object_reference,$object_index,$object_augments,$object_defval,$notification_objects,$parent,$OID) = ('','','','','','','','','','','','','','','','')
+        $counter += 1
         continue
       }
       else {
-        $description = $description + ' ' + $line
-        continue
+        #unexpected state
+        $debugMessage = "UNEXPECTED STATE"
+        Write-Debug $debugMessage
       }
+      $counter += 1
+      continue
+      
     }
-    elseif ($sa_status -eq "process_object_description"){
-      if ($line.EndsWith('"')){
-        $description = $description + ' ' + $line
-        $sa_status = "process_object"
-        continue
-      }
-      else {
-        $description = $description + ' ' + $line
-        continue
-      }
-    }
-    elseif ($sa_status -eq "process_trap_description"){
-      if ($line.EndsWith('"')){
-        $description = $description + ' ' + $line
-        $sa_status = "process_trap"
-        continue
-      }
-      else {
-        $description = $description + ' ' + $line
-        continue
-      }
-    }
-    elseif ($sa_status -eq "process_objects"){
-      if ($line.EndsWith('}')){
-        $objects = $objects + $line
-        $sa_status = "process_notification"
-        continue
-      }
-      else {
-        $objects = $objects + ' ' + $line
-        continue
-      }
-    }
-    elseif ($sa_status -eq "process_variables"){
-      if ($line.EndsWith('}')){
-        $objects = $objects + $line
-        $sa_status = "process_trap"
-        continue
-      }
-      else {
-        $objects = $objects + ' ' + $line
-        continue
-      }
-    }
-    elseif ($sa_status -eq "process_object_identifier") {
-      if ($line -Match "::="){
-        $parent_and_id = $line -replace "::=", ""
-        $parent_and_id = $parent_and_id -replace "{", "" 
-        $parent_and_id = $parent_and_id -replace "}", ""
-        $parent_and_id = $parent_and_id.trim()
-        ($parent,$ID)  = ($parent_and_id -split " ")
-        $description = $description -replace ";", ","
-        $description = $description -replace "`t", " "
-        $object_type = "OBJECT IDENTIFIER"
-        $objectProperties = @{ objectName = $object_name; objectType = $object_type; objectSyntax = $object_syntax; status = $status; description = $description; objects = $objects; ID = $ID; parent = $parent; OID = "$parent.$ID"; module = $module_name; objectFullName = "$module_name::$object_name" }
-        $object = New-Object psobject -Property $objectProperties
-        $mib += $object
-        $sa_status="init"
-        $object_name = ""
-        $object_syntax = ""
-        $parent = ""
-        continue
-      }
-    }
-    elseif ($sa_status -eq "process_imports"){
-      if ($line.EndsWith(';')){
-        $sa_status = "init"
-        continue
-      }
-    }
-    elseif ($sa_status -eq "process_module_identity") {
-      if ($line -Match "::="){
-        $parent_and_id = $line -replace "::=", ""
-        $parent_and_id = $parent_and_id -replace "{", "" 
-        $parent_and_id = $parent_and_id -replace "}", ""
-        $parent_and_id = $parent_and_id.trim()
-        ($parent,$ID)  = ($parent_and_id -split " ")
-        $description = $description -replace ";", ","
-        $description = $description -replace "`t", " "
-        $objectProperties = @{ objectName = $object_name; objectType = $object_type; objectSyntax = $object_syntax; status = $status; description = $description; objects = $objects; ID = $ID; parent = $parent; OID = "$parent.$ID"; module = $module_name; objectFullName = "$module_name::$object_name" }
-        $object = New-Object psobject -Property $objectProperties
-        $mib += $object
-        $sa_status="init"
-        $parent = ""
-        $object_syntax = ""
-        continue
-      }
-    }
+    $counter += 1
   }
+  $debugMessage = "Number of objects in mib: " +$mib.Length 
+  Write-Debug $debugMessage
+  $debugMessage = "END PARSING" 
+  Write-Debug $debugMessage
   return $mib
 }
 
-#Takes object name and returns OID (in number format) or Null
-function Select-OID($object_name, $OIDrepo) {
-      $OIDrepo_SearchResult = select-string "^$object_name=" $OIDrepo
-      if ($OIDrepo_SearchResult) {
-        $OIDrepo_SearchResult = $OIDrepo_SearchResult.Line
-        $oid = $OIDrepo_SearchResult.Split("=")[1]
-        return $oid
-      }
-      else {
-        return $OIDrepo_SearchResult       
-      }
-}
-
-function Update-OIDRepo($object, $OIDrepo) {
-  $OIDrepo_Update = $object.objectName + '=' + $object.OID
-  $OIDrepo_SearchResult = select-string "^$OIDrepo_Update$" $OIDrepo
-  if (!$OIDrepo_SearchResult) {
-    $OIDrepo_SearchResult = select-string "=$newOID$" $OIDrepo
-    if (!$OIDrepo_SearchResult) {
-      $OIDrepo_Update >> $OIDrepo
-      Write-verbose "$OIDrepo_Update added to $OIDrepo"
-    }
-    else {
-      Write-Host "ERROR: adding $OIDrepo_Update record with same OID already exist in $OIDrepo. - $OIDrepo_SearchResult "
+#Check OID if all "nodes" are numbers then return true
+function Is-Full-OID($OID) {
+  $is_Full_OID = $true
+  foreach ($ID in $OID.split('.')){
+    if (!($ID -match "^[\d\.]+$")) {
+      $is_Full_OID = $false
     }
   }
-  else {
-    Write-verbose "$OIDrepo_Update already exist in $OIDrepo"
+  return $is_Full_OID
+}
+
+#TO BE EDITED IT SHALL BE STAND ALONE FUNTION??? REALLY? NOT SURE
+function Update-OIDRepo($new_mib, $OIDrepo) {
+  $new_updates = $false
+  $mibrepo = Import-CSV $OIDrepo
+  foreach ($new_object in $new_mib) {
+    $newOID = $new_object.OID
+    $newObjectFullName = $new_object.objectFullName
+    $module_name = $new_object.module
+    if (!(Is-Full-OID $newOID) -and ($new_object.objectType -ne 'IMPORTS') -and ($new_object.objectType -ne 'SEQUENCE') -and ($new_object.objectType -ne 'TEXTUAL-CONVENTION') ) {
+      echo "ERROR: $newObjectFullName($newOID) is not fully resolved"
+    }
+    elseif (!($mibrepo| where {$_.objectFullName -eq $newObjectFullName})) {
+      $mibrepo += $new_object
+      $new_updates = $true
+      Write-verbose ($new_object.objectName + " added to $OIDrepo")
+    }
+    else {
+      if ($newOID -ne '') {
+        echo "WARNING: adding $newOID record with same OID already exist in $OIDrepo."
+      }
+    }
+  }
+  if ($new_updates) {
+    $mibrepo| Export-CSV -Path $OIDrepo -NoTypeInformation | Out-Null
   }
 }
 
@@ -884,8 +816,8 @@ function Import-MIB {
 .PARAMETER Path
     The path and file name of a mib file.
 .PARAMETER OIDrepo
-    File with list of pair OnjectName=OID, for example: synoSystem=1.3.6.1.4.1.6574.1
-    This help to resolve the OID to full number without it you might get resolution to highest object in MIB. Like this:
+    File with csv records generated, by Import-MIB (repo delivered with the module standard.csv contains standard MIBs ) 
+    It helps to resolve the OID to full number without it you might get resolution to highest object in MIB. Like this:
     enterprises.6574.1
 .PARAMETER UpdateOIDRepo
     This will udpate the OIDRepo file you provide as -OIDRepo parameter.       
@@ -894,7 +826,7 @@ function Import-MIB {
     Module Name    : MIB-Processing  
     Author         : Jiri Kindl; kindl_jiri@yahoo.com
     Prerequisite   : PowerShell V2 over Vista and upper.
-    Version        : 20200527
+    Version        : 20201211
     Copyright 2020 - Jiri Kindl
 .LINK  
     
@@ -925,7 +857,7 @@ function Import-MIB {
 
   #pars parametrs with param
   [CmdletBinding()]
-  param([Parameter(Position=0)][string]$Path, [string]$OIDrepo, [switch]$UpdateOIDRepo, 
+  param([Parameter(Position=0)][string]$Path, [string]$OIDrepo, [switch]$UpdateOIDRepo, [switch]$silent,
   [parameter(ValueFromPipeline=$true)][string]$pipelineInput)
 
   BEGIN {
@@ -962,66 +894,102 @@ function Import-MIB {
     }
   }
   END {
-    #$mib = Old-Parse-MIB $lines
-    $tokens = Sanitize-MIB-Text $lines
-    $mib = New-Parse-MIB $tokens
+    Write-verbose "Removing Comments"
+    $noCommentLines = Remove-Comments $lines
+    Write-verbose "Comments Removed"
 
-    #expand OID from parent.ID to full path in MIB scope
-    foreach ($object in $mib) {
-      $OID = Get-OID $object $mib
-      #DEBUG
-      #$object.objectName
-      #$OID
-      #DEBUG
-      $objectProperties = @{ objectName = $object.ObjectName; OID = $OID }
-      $new_object = New-Object psobject -Property $objectProperties
-      $OIDs += $new_object
-    }
+    Write-Verbose "Parsing to tokens"
+    $tokens = Get-Tokens $noCommentLines
+    Write-verbose "MIB Parsed to tokens"
+    
+    Write-verbose "Starting parsing to objects"
+    $mib = Parse-MIB $tokens
+    Write-verbose "MIB Parsed to Powershell objects"
 
-    #resolve OIDs to numbers (using OID repo file) And Update OID repo if switch UpdateOIDRepo is used
-    if ($OIDRepo) {
-      foreach ($oid_record in $OIDs) {
-        $oid=$oid_record.OID
-        $object_name_to_search = $oid.split('.')[0]
-        $OIDrepo_SearchResult = Select-OID $object_name_to_search $OIDrepo
-        if ($OIDrepo_SearchResult) {
-          $newOID = $oid -replace $object_name_to_search, $OIDrepo_SearchResult
-          $oid_record.OID = $newOID
-          if ($UpdateOIDRepo) {
-            Update-OIDRepo $oid_record $OIDrepo
+    Write-Verbose "Internal scope OID Expantion"
+
+    $debugMessage = "Number of objects in mib: " + $mib.Length
+    Write-Debug $debugMessage
+    
+    #Expand OID from parent.ID to full path in MIB scope
+    $updated = $true
+    while ($updated) {
+      $updated = $false
+      foreach ($object in $mib | where {$_.OID -ne ''}) {
+        $verboseMessage = "Resolving " + $object.objectName
+        Write-Verbose "$verboseMessage"
+        Write-Debug "$object"
+        if (!(($object.OID).split('.')[0] -match "^[\d\.]+$")) {
+          $unresolvedObject = $mib | where {$_.objectName -eq ($object.OID).split('.')[0]  -and  ($_.objectType -ne 'SEQUENCE' -and  $_.objectType -ne 'TEXTUAL-CONVENTION') }
+          if ($unresolvedObject) {
+            $verboseMessage = "Got parent " + $unresolvedObject.objectName
+            Write-Verbose "$verboseMessage"
+            $object.OID = $object.OID -replace ($object.OID).split('.')[0], $unresolvedObject.OID
+            $verboseMessage = "Updated OID to " + $object.OID
+            Write-Verbose "$verboseMessage"
+            $updated = $true
           }
-        }
-        else {
-          if ($UpdateOIDRepo) {
-            Write-Host "ERROR: $object_to_search from $Path not found in $OIDrepo"
-          }
-          else {
-            Write-Verbose "ERROR: $object_to_search from $Path not found in $OIDrepo"
-          }
-        
         }
       }
     }
 
-    #update find resolved OIDs to corresponding objects
-    foreach ($object in $OIDs) {
-      $mib_object = $mib | where objectName -EQ $object.objectName
-      $mib_object.OID = $object.OID
+   
+    #resolve OIDs to numbers (using OID repo file) And Update OID repo if switch UpdateOIDRepo is used
+    if ($OIDRepo) {
+      Write-Verbose "OID Repository resolution"
+      $mibrepo=Import-CSV $OIDrepo
+      foreach ($object in $mib | where {$_.OID -ne ''}) {
+        $oid=$object.OID
+        $object_name_to_search = $oid.split('.')[0]
+        $repo_SearchResults = $mibrepo | where {$_.objectName -eq $object_name_to_search}
+        $imported_objects = ($mib | where {$_.objectName -eq 'IMPORTS'}).objects
+        $imported_objects = $imported_objects -replace '{', ''
+        $imported_objects = $imported_objects -replace '}', ''
+        $imported_objects = $imported_objects -replace ' ', ''
+        if ($repo_SearchResults) {
+          foreach ($repo_SearchResult in $repo_SearchResults) {
+            if ($imported_objects.split(',') -contains $repo_SearchResult.module){
+              $resolvedOID = $repo_SearchResult.OID
+              $newOID = $oid -replace $object_name_to_search, $resolvedOID
+              $object.OID = $newOID
+              break
+            }
+          }
+        }
+        else {
+          Write-Verbose "ERROR: $object_name_to_search from $Path not found in $OIDrepo"
+        }
+      }
     }
-    return $mib
+
+    if ($UpdateOIDRepo) {
+      #$mib_object | Export-Csv -Path $OIDrepo -NoTypeInformation -Append
+      Update-OIDRepo $mib $OIDrepo
+    }
+    if (!$silent){
+      return $mib
+    }
   }
 }
 
 function ConvertTo-Snmptrap {
   <#  
 .SYNOPSIS  
-    Convert TRAP-TYPE ot NOTIFYCATION-TYPE MIB Objects to snmptrap commands, which can be used for testing. 
+    Convert TRAP-TYPE or NOTIFYCATION-TYPE MIB Objects to snmptrap commands, which can be used for testing. 
 .DESCRIPTION  
-    Convert TRAP-TYPE ot NOTIFYCATION-TYPE MIB Objects, generated by Improt-MIB to snmptrap commands, which can be used for testing.
+    Convert TRAP-TYPE or NOTIFYCATION-TYPE MIB Objects, generated by Improt-MIB to snmptrap commands, which can be used for testing.
+    Use -OIDrepo to get resolved objects/varaibles and -OIDs to generate command with OID numbers rather the names. 
+    Using OIDs rather the names let you use the command on device where MIB(s) not loaded
   
 .PARAMETER Path
     The path and file name of CSV file generated by Import-MIB
     If you use the CSV as input make sure the CSV was generated with -UseCulture
+.PARAMETER OIDrepo
+    File with csv records generated, by Import-MIB (repo delivered with the module standard.csv contains standard MIBs ) 
+    It helps to resolve the Objects which are in IMPORTS
+.PARAMETER OIDs
+    Use rather OIDs (number separated by dots) then Full Names of objects/varaibles.
+    It's usefull to run test snmptrap from device/server where the relevant MIB(s) is not loaded.
 .PARAMETER SnmpVersion
     Version of SNMP trap to use. 1, 2. By default version 1 is used.
 .PARAMETER TrapReciever
@@ -1033,7 +1001,7 @@ function ConvertTo-Snmptrap {
     Module Name    : MIB-Processing  
     Author         : Jiri Kindl; kindl_jiri@yahoo.com
     Prerequisite   : PowerShell V2 over Vista and upper.
-    Version        : 20200312
+    Version        : 20201212
     Copyright 2020 - Jiri Kindl
 .LINK  
     
@@ -1050,6 +1018,15 @@ function ConvertTo-Snmptrap {
     To generate snmptrap commands for testing based on ThreeParMIB.mib file
 
 .EXAMPLE
+    cat .\ThreeParMIB.mib | Import-MIB -OIDrepo .\myOIDrepo.oids | ConvertTo-Snmptrap -OIDrepo .\myOIDrepo
+    To generate snmptrap commands for testing based on ThreeParMIB.mib file and use OIDrepo to resolve objects which are not directly defined in this MIB
+
+.EXAMPLE
+    cat .\ThreeParMIB.mib | Import-MIB -OIDrepo .\myOIDrepo.oids | ConvertTo-Snmptrap -OIDrepo .\myOIDrepo -OIDs
+    To generate snmptrap commands for testing based on ThreeParMIB.mib file and use OIDrepo to resolve objects which are not directly defined in this MIB.
+    Also resolves objects/variable names to OIDs, so you can send test trap from device or server where relevant MIB(s) are not loaded.
+
+.EXAMPLE
     cat .\ThreeParMIB.mib | Import-MIB -OIDrepo .\myOIDrepo.oids | ConvertTo-Snmptrap -SnmpVersion 2
     To generate snmptrap commands, with version 2 traps, for testing based on ThreeParMIB.mib file
   #>
@@ -1058,6 +1035,7 @@ function ConvertTo-Snmptrap {
   [CmdletBinding()]
   param([Parameter(Position=0)][string]$Path, 
   [parameter(ValueFromPipeline=$true)]$pipelineInput,
+  [string]$OIDrepo,
   [string]$SnmpVersion = '1',
   $TrapReciever = 'TrapRecieverIP',
   $Community = 'public',
@@ -1066,12 +1044,12 @@ function ConvertTo-Snmptrap {
 
   BEGIN {
     $mib = @()
-    $test_string = '"Test string"'
+    $test_string = 'Test string'
     $test_number = 3
     $test_ip = "10.10.10.10"
     try {
       if ($Path) {
-        $mib=Import-Csv -UseCulture -Path $Path -ErrorAction Stop
+        $mib=Import-Csv  -Path $Path -ErrorAction Stop
       }
     }
     catch [System.Management.Automation.ItemNotFoundException] {
@@ -1081,6 +1059,12 @@ function ConvertTo-Snmptrap {
     }
     catch {
       $Error[0]
+    }
+    if ($OIDrepo) {
+      if (!(Test-Path -Path $OIDrepo)) {
+        Write-Host "ERROR: $OIDrepo doesn't exist"
+        Get-Help ConvertTo-Snmptrap
+      } 
     }
   }
   PROCESS {
@@ -1092,6 +1076,16 @@ function ConvertTo-Snmptrap {
     }
   }
   END {
+    if ($OIDRepo) {
+      Write-Verbose "OID Repository resolution"
+      $mibrepo=Import-CSV $OIDrepo
+      
+      $imported_modules = ($mib | where {$_.objectName -eq 'IMPORTS'}).objects
+      $imported_modules = ((($imported_modules -replace '{', '') -replace '}', '') -replace ' ', '').split(',')
+      #Write-Verbose "Importeds modules"
+      #$imported_modules 
+    }
+    
     $traps = $mib | where {($_.objectType -EQ "TRAP-TYPE" -or $_.objectType -EQ "NOTIFICATION-TYPE")}
     if ($traps) {
       #$traps
@@ -1101,35 +1095,123 @@ function ConvertTo-Snmptrap {
         $objects_parameters = ''
         #default is v 1, and if unsupported version is used it falls back to v 1
         $snmp_command = "snmptrap -v 1 -c $Community $TrapReciever "
-        foreach ($object_name in $object_names) {
-          $object_name = $object_name.trim()
-          $object = $mib | where {($_.objectName -EQ $object_name)}
-          if ($OIDs) {
-            $objects_parameters += $object.OID
+        if ($object_names -ne '') {
+          foreach ($object_name in $object_names) {
+            $object_name = $object_name.trim()
+            $object = $mib | where {($_.objectName -EQ $object_name)}
+
+            if (!$object) {
+              if ($OIDrepo) {
+                foreach ($module in $imported_modules) {
+                  $object = $mibrepo | where {($_.objectName -EQ $object_name -and $_.module -EQ $module)}
+                  if ($object) {
+                    break
+                  }
+                }
+              if (!$object) {
+                $errorMessage = "$object_name not resolved, checked the IMPORT section of MIB and update OIDrepo with corresponding MIBs for more details see Get-Help Import-MIB"
+                Write-Error $errorMessage
+              }
+            }
+            else {
+              $errorMessage = "$object_name not found run with -OIDrepo see Get-Help ConvertTo-Snmptrap"
+              write-error $errorMessage
+            }
           }
-          else {
-            $objects_parameters += $object.objectFullName
-          }
-          #Numbers
-          if (($object.objectSyntax -match 'INTEGER') -or ($object.objectSyntax -match 'Counter') -or ($object.objectSyntax -match 'Gauge') -or ($object.objectSyntax -match 'TimeTicks')) {
-            $objects_parameters += ' i '
-            $objects_parameters += "$test_number "
-          }
-          #Ips
-          elseif (($object.objectSyntax -match 'NetworkAddress') -or ($object.objectSyntax -match 'IpAddress')) {
-            $objects_parameters += ' a '
-            $objects_parameters += "$test_ip "
-          }
-          #Strings
-          elseif (($object.objectSyntax -match 'DisplayString') -or ($object.objectSyntax -match 'STRING')) {
-            $objects_parameters += ' s '
-            $objects_parameters += "$test_string "
-          }
-          else {
-            Write-Verbose "Unknown object SYNTAX:"
+
+            if ($OIDs) {
+              $objects_parameters += $object.OID + '.0'
+            }
+            else {
+              $objects_parameters += $object.objectFullName + '.0'
+            }
+            #Numbers
+            if (($object.objectSyntax -match 'INTEGER') -or ($object.objectSyntax -match 'TimeTicks')) {
+              $objects_parameters += ' i '
+              $objects_parameters += "$test_number "
+            }
+            #more numbers
+            elseif ($object.objectSyntax -match 'Unsigned') {
+              $objects_parameters += ' u '
+              $objects_parameters += "$test_number "
+            }
+            #more numbers
+            elseif (($object.objectSyntax -match 'Counter') -or ($object.objectSyntax -match 'Gauge')) {
+              $objects_parameters += ' c '
+              $objects_parameters += "$test_number "
+            }
+            #Ips
+            elseif (($object.objectSyntax -match 'NetworkAddress') -or ($object.objectSyntax -match 'IpAddress')) {
+              $objects_parameters += ' a '
+              $objects_parameters += "$test_ip "
+            }
+            #Strings
+            elseif (($object.objectSyntax -match 'DisplayString') -or ($object.objectSyntax -match 'STRING')) {
+              $objects_parameters += ' s '
+              $objects_parameters += '"' + $test_string + ' ' + $object.objectName + '" '
+            }
+
+            #Whatever else
+            else {
+              #Most probably it TEXTUAL-CONVENTION so lets try to search it:
+              $textual_convention = $mib | where {$_.objectName -eq $object.objectSyntax -and $_.objectType -eq 'TEXTUAL-CONVENTION'}
+              if (!$textual_convention) {
+                if ($OIDrepo) {
+                  foreach ($module in $imported_modules) {
+                    $textual_convention = $mibrepo | where {($_.objectName -EQ $object.objectSyntax -and $_.objectType -eq 'TEXTUAL-CONVENTION')}
+                    if ($textual_convention) {
+                      break
+                    }
+                  }
+                }
+              }
+              #If we got textual convention let's try to use it's SYNTAX
+              if ($textual_convention) {
+                #Numbers
+                if (($textual_convention.objectSyntax -match 'INTEGER') -or ($textual_convention.objectSyntax -match 'TimeTicks')) {
+                  $objects_parameters += ' i '
+                  $objects_parameters += "$test_number "
+                }
+                #more numbers
+                elseif ($textual_convention.objectSyntax -match 'Unsigned') {
+                  $objects_parameters += ' u '
+                  $objects_parameters += "$test_number "
+                }
+                #more numbers
+                elseif (($textual_convention.objectSyntax -match 'Counter') -or ($textual_convention.objectSyntax -match 'Gauge')) {
+                  $objects_parameters += ' c '
+                  $objects_parameters += "$test_number "
+                }
+                #Ips
+                elseif (($textual_convention.objectSyntax -match 'NetworkAddress') -or ($textual_convention.objectSyntax -match 'IpAddress')) {
+                  $objects_parameters += ' a '
+                  $objects_parameters += "$test_ip "
+                }
+                #Strings
+                elseif (($textual_convention.objectSyntax -match 'DisplayString') -or ($textual_convention.objectSyntax -match 'STRING')) {
+                  $objects_parameters += ' s '
+                  $objects_parameters += '"' + $test_string + ' ' + $object.objectName + '" '
+                }
+                else {
+                  #esle we stay at UNKNOWN
+                  $verboseMessage = "TEXTUAL-CONVENTION: $textual_convention , have UNKNOWN SYNTAX: " + $textual_convention.objectSyntax
+                  Write-Verbose $verboseMessage
+                  $objects_parameters += ' s '
+                  $objects_parameters += '"' + $test_string + ' ' + $object.objectName + ' ' + $object.objectSyntax + '" '
+                }
+              }
+              else {
+                #esle we stay at UNKNOWN
+                Write-Verbose "Unknown object SYNTAX:"
+                $objects_parameters += ' s '
+                $objects_parameters += '"' + $test_string + ' ' + $object.objectName + ' ' + $object.objectSyntax + '" '
+              }
+            }
+
           }
         }
         $objects_parameters = $objects_parameters.trim()
+
         #Write-Output "$objects_parameters"
         if ($SnmpVersion -match '2') {
           $snmp_command = "snmptrap -v 2c -c $Community $TrapReciever '0' "
@@ -1150,7 +1232,7 @@ function ConvertTo-Snmptrap {
           }
         }
         else {
-          Write-Verbose "Unsupporte SnmpVersion setting v1"
+          Write-Verbose "Unsupported SnmpVersion setting v1"
           $parent = $mib | where {($_.objectName -EQ $trap.parnet)}  
           if ($OIDs) {
             $snmp_command += $parent.OID + ' localhost 6 '+ $trap.ID + ' "0" '
@@ -1177,7 +1259,8 @@ function Get-MIBInfo {
 .SYNOPSIS  
     Get the MIB file basic Info.
 .DESCRIPTION  
-    Get basci Info from MIB File like, Module name and revision.
+    Get basic Info from MIB File like, Module name, last updated and revision, description etc.
+    It also includes hash of file to let you find duplicits.
     
 .PARAMETER Path
     The path and file name of a mib file.
@@ -1186,7 +1269,7 @@ function Get-MIBInfo {
     Module Name    : MIB-Processing  
     Author         : Jiri Kindl; kindl_jiri@yahoo.com
     Prerequisite   : PowerShell V2 over Vista and upper.
-    Version        : 20200305
+    Version        : 20201027
     Copyright 2020 - Jiri Kindl
 .LINK  
     
@@ -1202,7 +1285,7 @@ function Get-MIBInfo {
 
   BEGIN {
     $lines = @()
-    $sa_status="init"
+    $sa_status='init'
 
     try {
       if ($Path) {
@@ -1212,60 +1295,269 @@ function Get-MIBInfo {
     catch [System.Management.Automation.ItemNotFoundException] {
       "No such file"
       ""
-      get-help Import-MIB
+      get-help Get-MIBInfo
     }
     catch {
       $Error[0]
-      get-help Import-MIB
+      get-help Get-MIBInfo
     }
   }
 
   END {
+    $token_counter = 0
+    $revision_number = ''
+    $revision_description = ''
+    $revisionProperties = @{}
+    $last_updated = ''
+    $organization = ''
+    $contac_info = ''
+    $description = ''
+    $revisions = @()
+    $revision_numbers = @()
+    $last_revision = ''
+
+
+    Write-verbose "Removing Comments"
+    $noCommentLines = Remove-Comments $lines
+    Write-verbose "Comments Removed"
+
+    Write-Verbose "Parsing to tokens"
+    $tokens = Get-Tokens $noCommentLines
+    Write-verbose "MIB Parsed to tokens"
+
     $fileInfo = ls $Path
-    Foreach ($line in $lines) {
-      #clean lines from extra spaces
-      $line = $line.trim() 
-      $line = $line -replace '\s+', " "
-      #ignore comments
-      if ($line.startswith("--")) {
-        continue
-      }
-      if ($sa_status -eq "init") {
-        if ($line.endswith(' DEFINITIONS ::= BEGIN')) {
-          $moduleName = $line -replace ' DEFINITIONS ::= BEGIN'
-          $moduleName = $moduleName.trim()
+    
+    Foreach ($token in $tokens) {
+      if ($sa_status -eq 'init') {
+        if ( ($token -eq 'BEGIN') -and ($tokens[$token_counter -1] -eq '::=') -and ($tokens[$token_counter -2] -eq 'DEFINITIONS') ) {
+          $module_name = $tokens[$token_counter -3]
+          $token_counter += 1
           continue
         }
-        elseif ($line -cmatch "MODULE-IDENTITY") {
-          $sa_status = "process_module_identity"
-          $line = $line -replace "MODULE-IDENTITY", ""
-          $object_name = $line.trim()
-          $object_type = "MODULE-IDENTITY"
+        elseif ($token -eq 'MODULE-IDENTITY') {
+          $sa_status = 'process_module_identity'
+          $token_counter += 1
           continue
         } 
       }
-      elseif ($sa_status -eq "process_module_identity") {
-        if ($line -Match "LAST-UPDATED") {
-          $revision = $line -replace "LAST-UPDATED"
-          $revision = $revision.trim()
+      elseif ($sa_status -eq 'process_module_identity') {
+        if ($token -eq 'LAST-UPDATED') {
+          $last_updated = $tokens[$token_counter + 1]
+          $token_counter += 1
           continue
         }
-        elseif ($line -Match "::="){
-          $parent_and_id = $line -replace "::=", ""
-          $parent_and_id = $parent_and_id -replace "{", "" 
-          $parent_and_id = $parent_and_id -replace "}", ""
-          $parent_and_id = $parent_and_id.trim()
-          ($parent,$ID)  = ($parent_and_id -split " ")
-          $description = $description -replace ";", ","
-          $description = $description -replace "`t", " "
+        elseif ($token -eq 'ORGANIZATION') {
+          $organization = $tokens[$token_counter + 1]
+          $token_counter += 1
+          continue
+        
+        }
+		elseif ($token -eq 'CONTACT-INFO') {
+          $contac_info = $tokens[$token_counter + 1]
+          $token_counter += 1
+          continue
+        }
+		elseif ($token -eq 'DESCRIPTION') {
+          $description = $tokens[$token_counter + 1]
+          $token_counter += 1
+          continue
+        }
+        elseif ($token -eq 'REVISION') {
+          $sa_status = 'process_revisions'
+          $revision_number = $tokens[$token_counter + 1]
+          $token_counter += 1
+          continue
+        }
+        elseif ($token -eq '::='){
           break
         }
+      }
+      elseif ($sa_status -eq 'process_revisions') {
+        if ($token -eq 'REVISION') {
+          $revision_numbers += $revision_number
+          $revisionProperties = @{revisionNumber = $revision_number; revisionDescription = $revision_description}
+          $revision = New-Object psobject -Property $revisionProperties
+          $revisions += $revision
+          $revision_number = $tokens[$token_counter + 1]
+          $token_counter += 1
+          continue
+        }
+        elseif ($token -eq 'DESCRIPTION') {
+          $revision_description = $tokens[$token_counter + 1]
+          $token_counter += 1
+          continue
+        }
+        elseif ($token -eq '::='){
+          $revision_numbers += $revision_number
+          $revisionProperties = @{revisionNumber = $revision_number; revisionDescription = $revision_description}
+          $revision = New-Object psobject -Property $revisionProperties
+          $revisions += $revision
+          if ($revision_numbers.Length -gt 1) {
+            $latest_revision = ($revision_numbers |sort)[-1]
+          }
+          elseif ($revision_numbers.Length -eq 1) {
+            $latest_revision = $revision_numbers[0]
+          }
+          break
+
+        }
+      }
+      $token_counter += 1
     }
-    
-    }
-    $objectProperties = @{ fileFullName = $fileInfo.FullName; fileName = $fileInfo.Name; fileSize = $fileInfo.Length; ModuleName = $moduleName; revision = $revision }
+    $file_hash = Get-FileHash $Path
+    $objectProperties = @{ fileFullName = $fileInfo.FullName; fileName = $fileInfo.Name; fileSize = $fileInfo.Length; moduleName = $module_name; lastUpdated = $last_updated; revisions = $revisions; latestRevision = $latest_revision; description = $description; organization = $organization; contact = $contac_info; fileHash = $file_hash.Hash }
     $MIBFileInfo = New-Object psobject -Property $objectProperties
     $MIBFileInfo  
     
+  }
+}
+
+function Is-BackwardsCompatible {
+<#  
+.SYNOPSIS  
+    Check if two MIBs, newer and older are bacwards compatible, return True if they are.
+.DESCRIPTION  
+    Check if two MIBs, newer and older are backwards compatible, return True if they are and false if not.
+    Checks if all objects from older are in newer with same OID, if Trap/Notification also check that all Variables from older are in newer and in same order.
+    Use rather csv exports of MIBs rahter then MIBs. It's quicker.
+    
+.PARAMETER newer
+    The path and file name of a newer mib file or csv (generated for that mib).
+
+.PARAMETER older
+    The path and file name of a newer mib file or csv (generated for that mib).
+
+.PARAMETER details
+    Prints out detail info about results, so you know what's new in the MIB or what is missing.
+    
+.NOTES  
+    Module Name    : MIB-Processing  
+    Author         : Jiri Kindl; kindl_jiri@yahoo.com
+    Prerequisite   : PowerShell V2 over Vista and upper.
+    Version        : 202011111
+    Copyright 2020 - Jiri Kindl
+.LINK  
+    
+.EXAMPLE
+    Is-BackwardsCompatible -Newer .\ocum-9_4.csv -Older .\ocum-6_2.csv
+    Returns true if ocum-9_4.csv is backward compatible with ocum-6_2.csv 
+
+#>
+
+  #parse parametrs with param
+  [CmdletBinding()]
+  param([string]$Newer, [string]$Older, [switch]$Details)
+
+  BEGIN {
+    $lines = @()
+    $sa_status='init'
+
+    try {
+      if ($Newer) {
+        $newerFile = ls $Newer -ErrorAction Stop
+        if ($newerFile.Extension -eq '.mib') {
+          $newerMib = Import-MIB $newerFile
+        }
+        elseif ($newerFile.Extension -eq '.csv') {
+          $newerMib = Import-CSV $newerFile
+        }
+        else {
+          "Make sure file is .csv or .mib"
+          "" 
+          get-help Is-BackwardsCompatible  
+        }
+      }
+      else {
+        "Need two files to compare newer and older"
+        "" 
+        get-help Is-BackwardsCompatible
+      }
+    }
+    catch [System.Management.Automation.ItemNotFoundException] {
+      "No such file $Newer"
+      ""
+      get-help Is-BackwardsCompatible
+    }
+    catch {
+      $Error[0]
+      get-help Is-BackwardsCompatible
+    }
+    try {
+      if ($Older) {
+        $olderFile = ls $Older -ErrorAction Stop
+        if ($olderFile.Extension -eq '.mib') {
+          $olderMib = Import-MIB $olderFile
+        }
+        elseif ($olderFile.Extension -eq '.csv') {
+          $olderMib = Import-CSV $olderFile
+        }
+        else {
+          "Make sure file is .csv or .mib"
+          "" 
+          get-help Is-BackwardsCompatible  
+        }
+      }
+      else {
+        "Need two files to compare newer and older"
+        "" 
+        get-help Is-BackwardsCompatible
+      }
+    }
+    catch [System.Management.Automation.ItemNotFoundException] {
+      "No such file $Older"
+      ""
+      get-help Is-BackwardsCompatible
+    }
+    catch {
+      $Error[0]
+      get-help Is-BackwardsCompatible
+    }
+  }
+  PROCESS {
+    $compatible = $true
+    foreach ($diffObject in compare-object $newerMib $olderMib -PassThru) {
+      if ($diffObject.sideIndicator -eq '=>') {
+        $compatible = $false
+        if ($Details) {
+          $detailMessage = 'Object missing in newer MIB: ' + $diffObject.objectFullName
+          Write-Output $detailMessage
+        }
+        Write-Verbose "$diffObject"
+      }
+      else {
+        $olderObject = $olderMib | where {$_.objectFullName -eq $diffObject.objectFullName}
+        if ($olderObject) {
+          if ($olderObject.OID -eq $diffObject.OID) {
+            if ( -Not ((($diffObject.objects -replace '{', '') -replace '}', '') -replace '\s+', '').StartsWith(((($olderObject.objects -replace '{', '') -replace '}', '') -replace '\s+', '').toString()) ) {
+              $compatible = $false
+              if ($Details) {
+                $detailMessage = 'Odrer of objects/variables in trap have changed: ' + $diffObject.objectFullName
+                Write-Output $detailMessage
+                $detailMessage = ($diffObject.objects -replace '{', '') -replace '}', ''
+                Write-Output $detailMessage
+                $detailMessage = ($olderObject.objects -replace '{', '') -replace '}', ''
+                Write-Output $detailMessage
+              }
+            }            
+          }
+          else {
+            $compatible = $false
+            if ($Details) {
+              $detailMessage = 'OID changed: ' + $olderObject.OID + '(' + $olderObject.objectFullName + ') => ' + $diffObject.OID + '(' + $diffObject.objectFullName +')'
+              Write-Output $detailMessage 
+            }
+          }
+        }
+        else {
+          if ($Details) {
+            $detailMessage = 'New object added: ' + $diffObject.objectFullName
+            Write-Output $detailMessage
+          }
+        }
+      }
+    }
+  }
+  END {
+    return $compatible
   }
 }
