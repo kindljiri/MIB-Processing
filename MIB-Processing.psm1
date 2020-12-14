@@ -395,7 +395,7 @@ function Parse-MIB($tokens) {
           break 
         }
       }
-      if ($currently_processing_macro -eq 'TEXTUAL-CONVENTION' -and ($tokens[$counter+1] -eq '::=' -or $token -eq 'END') ) {
+      if ($currently_processing_macro -eq 'TEXTUAL-CONVENTION' -and ($tokens[$counter+1] -eq '::=' -or $token -eq 'END' -or ($tokens[$counter+2] -eq '::=' -and $tokens[$counter+1] -eq 'IDENTIFIER') ) ) {
         $sa_status = 'init'
         $object_syntax = $object_syntax.trim()
         $objectProperties = @{ objectName = $object_name; objectType = $object_type; objectSyntax = $object_syntax; status = $status; description = $description; objects = $notification_objects; ID = $ID; parent = $parent; OID = $OID; module = $module_name; objectFullName = "$module_name::$object_name" }
@@ -464,7 +464,7 @@ function Parse-MIB($tokens) {
           break 
         }
       }
-      if ($currently_processing_macro -eq 'TEXTUAL-CONVENTION' -and ($tokens[$counter+1] -eq '::=' -or $token -eq 'END') ) {
+      if ($currently_processing_macro -eq 'TEXTUAL-CONVENTION' -and ($tokens[$counter+1] -eq '::=' -or $token -eq 'END' -or ($tokens[$counter+2] -eq '::=' -and $tokens[$counter+1] -eq 'IDENTIFIER') ) ) {
         $sa_status = 'init'
         $status = $status.trim()
         $objectProperties = @{ objectName = $object_name; objectType = $object_type; objectSyntax = $object_syntax; status = $status; description = $description; objects = $notification_objects; ID = $ID; parent = $parent; OID = $OID; module = $module_name; objectFullName = "$module_name::$object_name" }
@@ -494,7 +494,7 @@ function Parse-MIB($tokens) {
           break
         }  
       }
-      if ($currently_processing_macro -eq 'TEXTUAL-CONVENTION' -and ($tokens[$counter+1] -eq '::=' -or $token -eq 'END') ) {
+      if ($currently_processing_macro -eq 'TEXTUAL-CONVENTION' -and ($tokens[$counter+1] -eq '::=' -or $token -eq 'END' -or ($tokens[$counter+2] -eq '::=' -and $tokens[$counter+1] -eq 'IDENTIFIER') ) ) {
         $sa_status = 'init'
         $objectProperties = @{ objectName = $object_name; objectType = $object_type; objectSyntax = $object_syntax; status = $status; description = $description; objects = $notification_objects; ID = $ID; parent = $parent; OID = $OID; module = $module_name; objectFullName = "$module_name::$object_name" }
         $object = New-Object psobject -Property $objectProperties
@@ -524,7 +524,7 @@ function Parse-MIB($tokens) {
           break  
         }
       }
-      if ($currently_processing_macro -eq 'TEXTUAL-CONVENTION' -and ($tokens[$counter+1] -eq '::=' -or $token -eq 'END') ) {
+      if ($currently_processing_macro -eq 'TEXTUAL-CONVENTION' -and ($tokens[$counter+1] -eq '::=' -or $token -eq 'END' -or ($tokens[$counter+2] -eq '::=' -and $tokens[$counter+1] -eq 'IDENTIFIER') ) ) {
         $sa_status = 'init'
         $object_reference = $object_reference.trim() 
         $objectProperties = @{ objectName = $object_name; objectType = $object_type; objectSyntax = $object_syntax; status = $status; description = $description; objects = $notification_objects; ID = $ID; parent = $parent; OID = $OID; module = $module_name; objectFullName = "$module_name::$object_name" }
@@ -555,7 +555,7 @@ function Parse-MIB($tokens) {
           break 
         }
       }
-      if ($currently_processing_macro -eq 'TEXTUAL-CONVENTION' -and ($tokens[$counter+1] -eq '::=' -or $token -eq 'END') ) {
+      if ($currently_processing_macro -eq 'TEXTUAL-CONVENTION' -and ($tokens[$counter+1] -eq '::=' -or $token -eq 'END' -or ($tokens[$counter+2] -eq '::=' -and $tokens[$counter+1] -eq 'IDENTIFIER') ) ) {
         $sa_status = 'init'
         $display_hint = $display_hint.trim()
         $objectProperties = @{ objectName = $object_name; objectType = $object_type; objectSyntax = $object_syntax; status = $status; description = $description; objects = $notification_objects; ID = $ID; parent = $parent; OID = $OID; module = $module_name; objectFullName = "$module_name::$object_name" }
@@ -688,7 +688,7 @@ function Parse-MIB($tokens) {
         #we need to check it and separate ID and "parent" accordingly
         if ($nodes.Count -gt 2) {
           $ID = $nodes[-1]
-          $ID.trim()
+          $ID = $ID.trim()
           foreach ($node in $nodes[0..($nodes.Count - 2)]) {
             #as there can be also OID assignments like below need to go through all nodes and get just numbers
             #{ iso(1) member-body(2) us(840) ieee802dot3(10006) snmpmibs(300) 43 } 
@@ -826,7 +826,7 @@ function Import-MIB {
     Module Name    : MIB-Processing  
     Author         : Jiri Kindl; kindl_jiri@yahoo.com
     Prerequisite   : PowerShell V2 over Vista and upper.
-    Version        : 20201211
+    Version        : 20201214
     Copyright 2020 - Jiri Kindl
 .LINK  
     
