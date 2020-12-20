@@ -3,15 +3,13 @@
 function Remove-Comments($lines){
   $linesWithoutComments = @()
   $sa_state = 'init'
-  $line_counter = 0
   #start with preprocessing
   $lines = $lines | where {$_.trim() -ne ''}
   #remove comments
   $debugMessage = "STARTING REMOVE-COMMENTS"
   Write-Debug $debugMessage
   foreach ($line in $lines) {
-   
-    $line_counter = +1
+    $tmp = ''
     $line = $line -replace '\s+', ' '
 
     #unify comments because some stupids are able to use this --- Comment (as -- are opening the comment and next -- on the line are end it's valid comment)
@@ -23,61 +21,43 @@ function Remove-Comments($lines){
     $line = $line -replace '--', ' -- '
     #And then finally (we have only -- marking beging and end of comment
     #by adding spaces around I can split based on the '--' and every 
-    $sa_state = 'init'
-    if ($line -match '--' -or $line -match '"') {
-      $tmp=''
-      foreach ($token in $line.split(' ')){
-        Write-Debug $line
-        $debugMessage = "Status=$sa_state,Token=$token,Counter=$line_counter"
-        Write-Debug $debugMessage
-        if ($sa_state -eq 'init') { 
-          if ($token -eq '--'){
-            $sa_state = 'comment_processing'
-            $linesWithoutComments += $tmp.trim()
-            $tmp = ''
-            continue
-          }
-          elseif ($token.startsWith('"')) {
-            $sa_state = 'text_processing'
-            $tmp += " $token"
-            continue
-          }
-          else {
-            $tmp += " $token"
-            continue
-          }
+    $line = $line -replace '"', ' " '
+    #Adding space around " to make it token
+
+    #foreach line do this littel state automata
+    foreach ($token in $line.split(' ')) {
+      $debugMessage = "Status=$sa_state,Token=$token"
+      Write-Debug $debugMessage
+      if ($sa_state -eq 'init') {
+        if ($token -eq '"'){
+          $sa_state = 'text_processing'
+          $tmp += " $token"
+          continue 
         }
-        elseif ($sa_state -eq 'text_processing') {
-          if ($token.endswith('"')){
-            $sa_state = 'init'
-          }
+        elseif ($token -eq '--') {
+          $sa_state = 'comment_processing'
+          continue
+        }
+        else {
           $tmp += " $token"
           continue
         }
-        elseif($sa_state -eq 'comment_processing'){
-          if ($token -eq '--') {
-            $sa_state = 'init'
-            continue
-          }
-          else {
-            continue
-          }
+      }
+      elseif ($sa_state -eq 'text_processing'){
+        if ($token -eq '"') {
+          $sa_state = 'init'
         }
-        else{
-          #unknown state
-        }       
-      }
-      if ($sa_state -ne 'text_processing') {
-        $sa_state = 'init'
-      }
-      if ($tmp -ne '') {
-        $linesWithoutComments += $tmp.trim()
-      }
-      continue
+        $tmp += " $token" 
+      }    
     }
-    else {
-      $linesWithoutComments += $line
+    #after finnishing the line if it's processing comment swithc back to init cause newline is end of comment
+    if ($sa_state -eq 'comment_processing') {
+      $sa_state = 'init'
     }
+    if ($tmp.trim() -ne '') {
+      $linesWithoutComments += $tmp.trim()
+    }    
+    
   }
   $linesWithoutComments = $linesWithoutComments | where {$_.trim() -ne ''}
   $debugMessage = "ENDING REMOVE-COMMENTS"
@@ -114,16 +94,6 @@ function Get-Tokens($linesWithoutComments) {
   foreach ($token in $preprocessed_lines) {
     $token = $token.trim()
 
-    #skip of empty tokens
-    #if ($token -eq '') {
-    #  continue
-    #}
-
-    #$token.getType()
-    #echo "DEBUG: State=$sa_state,Token=$token,"
-    #as we removed oneline comments we can process following states
-    #array: start with { and ends with }
-    #quoted text: start with " and ends with "
     if ($sa_state -eq 'init'){
       if ($token -eq '{') {
         $array = '{'
@@ -284,14 +254,14 @@ function Parse-MIB($tokens) {
       if ($token.endswith(';')) {
         $imported_modules += '}'
         $imported_modules = $imported_modules -replace ';, }', ' }'
-        $objectProperties = @{ objectName = 'IMPORTS'; objectType = 'IMPORTS'; objectSyntax = 'IMPORTS'; status = $status; description = 'Other modules refered in this module'; objects = $imported_modules; ID = ''; parent = ''; OID = ''; module = $module_name; objectFullName = '' }
+        $objectProperties = @{ objectName = 'IMPORTS'; objectType = 'IMPORTS'; objectSyntax = $object_syntax; status = $status; defval = $object_defval; units = $object_units; augments = $object_augments; maxAccess = $object_max_access; reference = $object_reference; index = $object_index ; description = $description; objects = $imported_modules; ID = $ID; parent = $parent; OID = $OID; module = $module_name; objectFullName = "$module_name::$object_name" }
         $object = New-Object psobject -Property $objectProperties
         $mib += $object
         $debugMessage = "Creating Object=$object"
         Write-Debug $debugMessage
         $debugMessage = "Number of objects in mib: " +$mib.Length 
         Write-Debug $debugMessage
-        ($object_name,$object_type,$object_syntax,$status,$description,$objects,$ID,$paren) = ('','','','','','','','','','','','','','','','','')
+        ($object_name,$object_type,$object_syntax,$status,$description,$objects,$ID,$object_max_access,$object_units,$object_reference,$object_index,$object_augments,$object_defval,$notification_objects,$parent,$OID) = ('','','','','','','','','','','','','','','','')
         $sa_status = 'init'
         $counter += 1
         continue
@@ -395,17 +365,19 @@ function Parse-MIB($tokens) {
           break 
         }
       }
-      if ($currently_processing_macro -eq 'TEXTUAL-CONVENTION' -and ($tokens[$counter+1] -eq '::=' -or $token -eq 'END' -or ($tokens[$counter+2] -eq '::=' -and $tokens[$counter+1] -eq 'IDENTIFIER') ) ) {
-        $sa_status = 'init'
-        $object_syntax = $object_syntax.trim()
-        $objectProperties = @{ objectName = $object_name; objectType = $object_type; objectSyntax = $object_syntax; status = $status; description = $description; objects = $notification_objects; ID = $ID; parent = $parent; OID = $OID; module = $module_name; objectFullName = "$module_name::$object_name" }
-        $object = New-Object psobject -Property $objectProperties
-        $mib += $object
-        $debugMessage = "Creating Object=$object"
-        Write-Debug $debugMessage
-        $debugMessage = "Number of objects in mib: " +$mib.Length 
-        Write-Debug $debugMessage
-        ($object_name,$object_type,$object_syntax,$status,$description,$objects,$ID,$object_max_access,$object_units,$object_reference,$object_index,$object_augments,$object_defval,$notification_objects,$parent,$OID) = ('','','','','','','','','','','','','','','','')
+      if ($currently_processing_macro -eq 'TEXTUAL-CONVENTION') {
+        if (($tokens[$counter+1] -in ('::=', 'OBJECT-IDENTITY', 'OBJECT-TYPE','NOTIFICATION-TYPE', 'MODULE-COMPLIANCE', 'OBJECT-GROUP','NOTIFICATION-GROUP')) -or ($tokens[$counter+3] -eq '::=' -and $tokens[$counter+2] -eq 'IDENTIFIER') ) {
+          $sa_status = 'init'
+          $object_syntax = $object_syntax.trim()
+          $objectProperties = @{ objectName = $object_name; objectType = $object_type; objectSyntax = $object_syntax; status = $status; defval = $object_defval; units = $object_units; augments = $object_augments; maxAccess = $object_max_access; reference = $object_reference; index = $object_index ; description = $description; objects = $notification_objects; ID = $ID; parent = $parent; OID = $OID; module = $module_name; objectFullName = "$module_name::$object_name" }
+          $object = New-Object psobject -Property $objectProperties
+          $mib += $object
+          $debugMessage = "Creating Object=$object"
+          Write-Debug $debugMessage
+          $debugMessage = "Number of objects in mib: " +$mib.Length 
+          Write-Debug $debugMessage
+          ($object_name,$object_type,$object_syntax,$status,$description,$objects,$ID,$object_max_access,$object_units,$object_reference,$object_index,$object_augments,$object_defval,$notification_objects,$parent,$OID) = ('','','','','','','','','','','','','','','','')
+        }
       }
       if ($sa_status -eq 'SYNTAX') {
         $object_syntax += $token + " "
@@ -464,17 +436,19 @@ function Parse-MIB($tokens) {
           break 
         }
       }
-      if ($currently_processing_macro -eq 'TEXTUAL-CONVENTION' -and ($tokens[$counter+1] -eq '::=' -or $token -eq 'END' -or ($tokens[$counter+2] -eq '::=' -and $tokens[$counter+1] -eq 'IDENTIFIER') ) ) {
-        $sa_status = 'init'
-        $status = $status.trim()
-        $objectProperties = @{ objectName = $object_name; objectType = $object_type; objectSyntax = $object_syntax; status = $status; description = $description; objects = $notification_objects; ID = $ID; parent = $parent; OID = $OID; module = $module_name; objectFullName = "$module_name::$object_name" }
-        $object = New-Object psobject -Property $objectProperties
-        $mib += $object 
-        $debugMessage = "Creating Object=$object"
-        Write-Debug $debugMessage
-        $debugMessage = "Number of objects in mib: " +$mib.Length 
-        Write-Debug $debugMessage
-        ($object_name,$object_type,$object_syntax,$status,$description,$objects,$ID,$object_max_access,$object_units,$object_reference,$object_index,$object_augments,$object_defval,$notification_objects,$parent,$OID) = ('','','','','','','','','','','','','','','','')
+      if ($currently_processing_macro -eq 'TEXTUAL-CONVENTION') {
+        if (($tokens[$counter+1] -in ('::=', 'OBJECT-IDENTITY', 'OBJECT-TYPE','NOTIFICATION-TYPE', 'MODULE-COMPLIANCE', 'OBJECT-GROUP','NOTIFICATION-GROUP')) -or ($tokens[$counter+2] -eq '::=' -and $tokens[$counter+1] -eq 'IDENTIFIER') ) {
+          $sa_status = 'init'
+          $status = $status.trim()
+          $objectProperties = @{ objectName = $object_name; objectType = $object_type; objectSyntax = $object_syntax; status = $status; defval = $object_defval; units = $object_units; augments = $object_augments; maxAccess = $object_max_access; reference = $object_reference; index = $object_index ; description = $description; objects = $notification_objects; ID = $ID; parent = $parent; OID = $OID; module = $module_name; objectFullName = "$module_name::$object_name" }
+          $object = New-Object psobject -Property $objectProperties
+          $mib += $object
+          $debugMessage = "Creating Object=$object"
+          Write-Debug $debugMessage
+          $debugMessage = "Number of objects in mib: " +$mib.Length 
+          Write-Debug $debugMessage
+          ($object_name,$object_type,$object_syntax,$status,$description,$objects,$ID,$object_max_access,$object_units,$object_reference,$object_index,$object_augments,$object_defval,$notification_objects,$parent,$OID) = ('','','','','','','','','','','','','','','','')
+        }
       }
       if ($sa_status -eq 'STATUS') {
         $status += $token + " "
@@ -494,16 +468,19 @@ function Parse-MIB($tokens) {
           break
         }  
       }
-      if ($currently_processing_macro -eq 'TEXTUAL-CONVENTION' -and ($tokens[$counter+1] -eq '::=' -or $token -eq 'END' -or ($tokens[$counter+2] -eq '::=' -and $tokens[$counter+1] -eq 'IDENTIFIER') ) ) {
-        $sa_status = 'init'
-        $objectProperties = @{ objectName = $object_name; objectType = $object_type; objectSyntax = $object_syntax; status = $status; description = $description; objects = $notification_objects; ID = $ID; parent = $parent; OID = $OID; module = $module_name; objectFullName = "$module_name::$object_name" }
-        $object = New-Object psobject -Property $objectProperties
-        $mib += $object 
-        $debugMessage = "Creating Object=$object"
-        Write-Debug $debugMessage
-        $debugMessage = "Number of objects in mib: " +$mib.Length 
-        Write-Debug $debugMessage
-        ($object_name,$object_type,$object_syntax,$status,$description,$objects,$ID,$object_max_access,$object_units,$object_reference,$object_index,$object_augments,$object_defval,$notification_objects,$parent,$OID) = ('','','','','','','','','','','','','','','','')
+      if ($currently_processing_macro -eq 'TEXTUAL-CONVENTION') {
+        if (($tokens[$counter+1] -in ('::=', 'OBJECT-IDENTITY', 'OBJECT-TYPE','NOTIFICATION-TYPE', 'MODULE-COMPLIANCE', 'OBJECT-GROUP','NOTIFICATION-GROUP')) -or ($tokens[$counter+2] -eq '::=' -and $tokens[$counter+1] -eq 'IDENTIFIER') ) {
+          $sa_status = 'init'
+          $description = $description.trim()
+          $objectProperties = @{ objectName = $object_name; objectType = $object_type; objectSyntax = $object_syntax; status = $status; defval = $object_defval; units = $object_units; augments = $object_augments; maxAccess = $object_max_access; reference = $object_reference; index = $object_index ; description = $description; objects = $notification_objects; ID = $ID; parent = $parent; OID = $OID; module = $module_name; objectFullName = "$module_name::$object_name" }
+          $object = New-Object psobject -Property $objectProperties
+          $mib += $object
+          $debugMessage = "Creating Object=$object"
+          Write-Debug $debugMessage
+          $debugMessage = "Number of objects in mib: " +$mib.Length 
+          Write-Debug $debugMessage
+          ($object_name,$object_type,$object_syntax,$status,$description,$objects,$ID,$object_max_access,$object_units,$object_reference,$object_index,$object_augments,$object_defval,$notification_objects,$parent,$OID) = ('','','','','','','','','','','','','','','','')
+        }
       }
       if ($sa_status -eq 'DESCRIPTION' -and $token.startswith('"')) {
         $description = $token
@@ -524,17 +501,19 @@ function Parse-MIB($tokens) {
           break  
         }
       }
-      if ($currently_processing_macro -eq 'TEXTUAL-CONVENTION' -and ($tokens[$counter+1] -eq '::=' -or $token -eq 'END' -or ($tokens[$counter+2] -eq '::=' -and $tokens[$counter+1] -eq 'IDENTIFIER') ) ) {
-        $sa_status = 'init'
-        $object_reference = $object_reference.trim() 
-        $objectProperties = @{ objectName = $object_name; objectType = $object_type; objectSyntax = $object_syntax; status = $status; description = $description; objects = $notification_objects; ID = $ID; parent = $parent; OID = $OID; module = $module_name; objectFullName = "$module_name::$object_name" }
-        $object = New-Object psobject -Property $objectProperties
-        $mib += $object
-        $debugMessage = "Creating Object=$object"
-        Write-Debug $debugMessage
-        $debugMessage = "Number of objects in mib: " +$mib.Length 
-        Write-Debug $debugMessage
-        ($object_name,$object_type,$object_syntax,$status,$description,$objects,$ID,$object_max_access,$object_units,$object_reference,$object_index,$object_augments,$object_defval,$notification_objects,$parent,$OID) = ('','','','','','','','','','','','','','','','')
+      if ($currently_processing_macro -eq 'TEXTUAL-CONVENTION') {
+        if (($tokens[$counter+1] -in ('::=', 'OBJECT-IDENTITY', 'OBJECT-TYPE','NOTIFICATION-TYPE', 'MODULE-COMPLIANCE', 'OBJECT-GROUP','NOTIFICATION-GROUP')) -or ($tokens[$counter+2] -eq '::=' -and $tokens[$counter+1] -eq 'IDENTIFIER') ) {
+          $sa_status = 'init'
+          $object_reference = $object_reference.trim()
+          $objectProperties = @{ objectName = $object_name; objectType = $object_type; objectSyntax = $object_syntax; status = $status; defval = $object_defval; units = $object_units; augments = $object_augments; maxAccess = $object_max_access; reference = $object_reference; index = $object_index ; description = $description; objects = $notification_objects; ID = $ID; parent = $parent; OID = $OID; module = $module_name; objectFullName = "$module_name::$object_name" }
+          $object = New-Object psobject -Property $objectProperties
+          $mib += $object
+          $debugMessage = "Creating Object=$object"
+          Write-Debug $debugMessage
+          $debugMessage = "Number of objects in mib: " +$mib.Length 
+          Write-Debug $debugMessage
+          ($object_name,$object_type,$object_syntax,$status,$description,$objects,$ID,$object_max_access,$object_units,$object_reference,$object_index,$object_augments,$object_defval,$notification_objects,$parent,$OID) = ('','','','','','','','','','','','','','','','')
+        }
       }
       if ($sa_status -eq 'REFERENCE') {
         $object_reference += $token + " "
@@ -555,17 +534,19 @@ function Parse-MIB($tokens) {
           break 
         }
       }
-      if ($currently_processing_macro -eq 'TEXTUAL-CONVENTION' -and ($tokens[$counter+1] -eq '::=' -or $token -eq 'END' -or ($tokens[$counter+2] -eq '::=' -and $tokens[$counter+1] -eq 'IDENTIFIER') ) ) {
-        $sa_status = 'init'
-        $display_hint = $display_hint.trim()
-        $objectProperties = @{ objectName = $object_name; objectType = $object_type; objectSyntax = $object_syntax; status = $status; description = $description; objects = $notification_objects; ID = $ID; parent = $parent; OID = $OID; module = $module_name; objectFullName = "$module_name::$object_name" }
-        $object = New-Object psobject -Property $objectProperties
-        $mib += $object 
-        $debugMessage = "Creating Object=$object"
-        Write-Debug $debugMessage
-        $debugMessage = "Number of objects in mib: " +$mib.Length 
-        Write-Debug $debugMessage
-        ($object_name,$object_type,$object_syntax,$status,$description,$objects,$ID,$object_max_access,$object_units,$object_reference,$object_index,$object_augments,$object_defval,$notification_objects,$parent,$OID) = ('','','','','','','','','','','','','','','','')
+      if ($currently_processing_macro -eq 'TEXTUAL-CONVENTION') {
+        if (($tokens[$counter+1] -in ('::=', 'OBJECT-IDENTITY', 'OBJECT-TYPE','NOTIFICATION-TYPE', 'MODULE-COMPLIANCE', 'OBJECT-GROUP','NOTIFICATION-GROUP')) -or ($tokens[$counter+2] -eq '::=' -and $tokens[$counter+1] -eq 'IDENTIFIER') ) {
+          $sa_status = 'init'
+          $display_hint = $display_hint.trim()
+          $objectProperties = @{ objectName = $object_name; objectType = $object_type; objectSyntax = $object_syntax; status = $status; defval = $object_defval; units = $object_units; augments = $object_augments; maxAccess = $object_max_access; reference = $object_reference; index = $object_index ; description = $description; objects = $notification_objects; ID = $ID; parent = $parent; OID = $OID; module = $module_name; objectFullName = "$module_name::$object_name" }
+          $object = New-Object psobject -Property $objectProperties
+          $mib += $object
+          $debugMessage = "Creating Object=$object"
+          Write-Debug $debugMessage
+          $debugMessage = "Number of objects in mib: " +$mib.Length 
+          Write-Debug $debugMessage
+          ($object_name,$object_type,$object_syntax,$status,$description,$objects,$ID,$object_max_access,$object_units,$object_reference,$object_index,$object_augments,$object_defval,$notification_objects,$parent,$OID) = ('','','','','','','','','','','','','','','','')
+        }
       }
       if ($sa_status -eq 'DISPLAY-HINT') {
         $display_hint += $token + ' '
@@ -716,7 +697,7 @@ function Parse-MIB($tokens) {
       }
 
       $OID = $parent + '.' + $ID
-      $objectProperties = @{ objectName = $object_name; objectType = $object_type; objectSyntax = $object_syntax; status = $status; description = $description; objects = $notification_objects; ID = $ID; parent = $parent; OID = $OID; module = $module_name; objectFullName = "$module_name::$object_name" }
+      $objectProperties = @{ objectName = $object_name; objectType = $object_type; objectSyntax = $object_syntax; status = $status; defval = $object_defval; units = $object_units; augments = $object_augments; maxAccess = $object_max_access; reference = $object_reference; index = $object_index ; description = $description; objects = $notification_objects; ID = $ID; parent = $parent; OID = $OID; module = $module_name; objectFullName = "$module_name::$object_name" }
       $object = New-Object psobject -Property $objectProperties
       $mib += $object
       $debugMessage = "Creating Object=$object"
@@ -826,7 +807,7 @@ function Import-MIB {
     Module Name    : MIB-Processing  
     Author         : Jiri Kindl; kindl_jiri@yahoo.com
     Prerequisite   : PowerShell V2 over Vista and upper.
-    Version        : 20201214
+    Version        : 20201216
     Copyright 2020 - Jiri Kindl
 .LINK  
     
