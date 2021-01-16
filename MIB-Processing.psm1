@@ -366,7 +366,7 @@ function Parse-MIB($tokens) {
         }
       }
       if ($currently_processing_macro -eq 'TEXTUAL-CONVENTION') {
-        if (($tokens[$counter+1] -in ('::=', 'OBJECT-IDENTITY', 'OBJECT-TYPE','NOTIFICATION-TYPE', 'MODULE-COMPLIANCE', 'OBJECT-GROUP','NOTIFICATION-GROUP')) -or ($tokens[$counter+3] -eq '::=' -and $tokens[$counter+2] -eq 'IDENTIFIER') ) {
+        if (($tokens[$counter+1] -in ('::=', 'OBJECT-IDENTITY', 'OBJECT-TYPE','NOTIFICATION-TYPE', 'MODULE-COMPLIANCE', 'OBJECT-GROUP','NOTIFICATION-GROUP','END')) -or ($tokens[$counter+3] -eq '::=' -and $tokens[$counter+2] -eq 'IDENTIFIER') ) {
           $sa_status = 'init'
           $object_syntax = $object_syntax.trim()
           $objectProperties = @{ objectName = $object_name; objectType = $object_type; objectSyntax = $object_syntax; status = $status; defval = $object_defval; units = $object_units; augments = $object_augments; maxAccess = $object_max_access; reference = $object_reference; index = $object_index ; description = $description; objects = $notification_objects; ID = $ID; parent = $parent; OID = $OID; module = $module_name; objectFullName = "$module_name::$object_name" }
@@ -807,7 +807,7 @@ function Import-MIB {
     Module Name    : MIB-Processing  
     Author         : Jiri Kindl; kindl_jiri@yahoo.com
     Prerequisite   : PowerShell V2 over Vista and upper.
-    Version        : 20201216
+    Version        : 20210111
     Copyright 2020 - Jiri Kindl
 .LINK  
     
