@@ -982,7 +982,7 @@ function ConvertTo-Snmptrap {
     Module Name    : MIB-Processing  
     Author         : Jiri Kindl; kindl_jiri@yahoo.com
     Prerequisite   : PowerShell V2 over Vista and upper.
-    Version        : 20201212
+    Version        : 20210116
     Copyright 2020 - Jiri Kindl
 .LINK  
     
@@ -1030,7 +1030,7 @@ function ConvertTo-Snmptrap {
     $test_ip = "10.10.10.10"
     try {
       if ($Path) {
-        $mib=Import-Csv  -Path $Path -ErrorAction Stop
+        $mib= Import-Csv -Path $Path -ErrorAction Stop
       }
     }
     catch [System.Management.Automation.ItemNotFoundException] {
@@ -1203,23 +1203,33 @@ function ConvertTo-Snmptrap {
             $snmp_command += $trap.objectFullName + ' '
           }
         }
-        elseif ($SnmpVersion -match '1') {
-          $parent = $mib | where {($_.objectName -EQ $trap.parent)}
-          if ($OIDs) {
-            $snmp_command += $parent.OID + ' localhost 6 '+ $trap.ID + ' "0" '
-          }
-          else {
-            $snmp_command += $parent.objectFullName + ' localhost 6 '+ $trap.ID + ' "0" '
-          }
-        }
         else {
-          Write-Verbose "Unsupported SnmpVersion setting v1"
-          $parent = $mib | where {($_.objectName -EQ $trap.parnet)}  
-          if ($OIDs) {
-            $snmp_command += $parent.OID + ' localhost 6 '+ $trap.ID + ' "0" '
+          if ($SnmpVersion -notmatch '1') {
+            Write-Verbose "Unsupported SnmpVersion setting v1"
+          }
+
+          $parent = $mib | where {$_.objectName -eq $trap.parent} 
+          #try to check the oidrepo if it's there
+          if (!$parent) {
+            if ($OIDrepo) {
+              $parent = $mibrepo | where {$_.objectName -eq $trap.parent} 
+            }
+          }
+          #Just do fallback if it cannot find parent anywhere it's for cases like (parent = netapp.0)
+          if ($parent) {
+            $parent_oid = $parent.OID
+            $parent_name = $parent.objectFullName
           }
           else {
-            $snmp_command += $parent.objectFullName + ' localhost 6 '+ $trap.ID + ' "0" '
+            $parent_oid = $trap.parent
+            $parent_name = $trap.parent
+          }
+          
+          if ($OIDs) {
+            $snmp_command += $parent_oid + ' localhost 6 '+ $trap.ID + ' "0" '
+          }
+          else {
+            $snmp_command += $parent_name + ' localhost 6 '+ $trap.ID + ' "0" '
           }
         }
         $snmp_command += $objects_parameters
