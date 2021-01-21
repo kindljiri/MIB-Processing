@@ -163,12 +163,12 @@ function Parse-MIB($tokens) {
   #below is not used yet (will see if I'll use it later
   $macro_tokens = ('MODULE-IDENTITY','OBJECT-TYPE','NOTIFICATION-TYPE','OBJECT IDENTIFIER','TEXTUAL-CONVENTION')
   $notification_type_tokens = ('OBJECTS','STATUS','DESCRIPTION','REFERENCE','::=')
-  $object_type_tokens=('SYNTAX','UNITS','MAX-ACCESS','STATUS','DESCRIPTION','REFERENCE','INDEX','AUGMENTS','DEFVAL','::=')
+  $object_type_tokens=('SYNTAX','UNITS','MAX-ACCESS','ACCESS','STATUS','DESCRIPTION','REFERENCE','INDEX','AUGMENTS','DEFVAL','::=')
   $trap_type_tokens = ('ENTERPRISE','VARIABLES','DESCRIPTION','REFERENCE')
   $textaul_convention_clauses = ('DISPLAY-HINT', 'STATUS', 'DESCRIPTION', 'REFERENCE', 'SYNTAX')
   
   #below is union of above arrays + MACRO
-  $expected_type_tokens=('ENTERPRISE','VARIABLES','OBJECTS','SYNTAX','UNITS','MAX-ACCESS','DISPLAY-HINT','STATUS','DESCRIPTION','REFERENCE','INDEX','AUGMENTS','DEFVAL','::=','MACRO','OBJECT-GROUP','NOTIFICATION-GROUP','NOTIFICATIONS')
+  $expected_type_tokens=('ENTERPRISE','VARIABLES','OBJECTS','SYNTAX','UNITS','MAX-ACCESS','ACCESS','DISPLAY-HINT','STATUS','DESCRIPTION','REFERENCE','INDEX','AUGMENTS','DEFVAL','::=','MACRO','OBJECT-GROUP','NOTIFICATION-GROUP','NOTIFICATIONS')
 
   foreach ($token in $tokens) {
     $debugMessage = "Currently processing=$currently_processing_macro,Status=$sa_status,Token=$token,Counter=$counter"
@@ -418,6 +418,25 @@ function Parse-MIB($tokens) {
         }
       }
       if ($sa_status -eq 'MAX-ACCESS') {
+        $object_max_access += $token + " "
+      }
+      else {
+        #unexpected token
+        #$debugMessage = "UNEXPECTED STATE"
+        #Write-Debug $debugMessage
+      }
+      $counter += 1
+      continue
+    }
+    elseif ($sa_status -eq 'ACCESS') {
+      foreach ($ott in $expected_type_tokens) {
+        if ($ott -eq $token) {
+          $sa_status = $token
+          $object_max_access = $object_max_access.trim()
+          break 
+        }
+      }
+      if ($sa_status -eq 'ACCESS') {
         $object_max_access += $token + " "
       }
       else {
@@ -801,13 +820,15 @@ function Import-MIB {
     It helps to resolve the OID to full number without it you might get resolution to highest object in MIB. Like this:
     enterprises.6574.1
 .PARAMETER UpdateOIDRepo
-    This will udpate the OIDRepo file you provide as -OIDRepo parameter.       
+    This will udpate the OIDRepo file you provide as -OIDRepo parameter. 
+.PARAMETER silent
+    Used in combination with UpdateOIDRepo. In order to not print out the mib objects.      
     
 .NOTES  
     Module Name    : MIB-Processing  
     Author         : Jiri Kindl; kindl_jiri@yahoo.com
     Prerequisite   : PowerShell V2 over Vista and upper.
-    Version        : 20210111
+    Version        : 20210121
     Copyright 2020 - Jiri Kindl
 .LINK  
     
@@ -816,23 +837,23 @@ function Import-MIB {
     Process the MIB and returns the as array of objects
 
 .EXAMPLE 
-    Import-MIB -Path .\SYNOLOGY-SYSTEM-MIB.mib -OIDrepo .\all.oids
+    Import-MIB -Path .\SYNOLOGY-SYSTEM-MIB.mib -OIDrepo .\all.csv
     Process the MIB and returns the as array of objects. Use OIDrepo file to resolve OIDs 
 
 .EXAMPLE
-    Import-MIB -Path .\SYNOLOGY-SYSTEM-MIB.mib -OIDrepo .\all.oids -UpdateOIDRepo
+    Import-MIB -Path .\SYNOLOGY-SYSTEM-MIB.mib -OIDrepo .\all.csv -UpdateOIDRepo
     Process the MIB and returns the as array of objects. Use OIDrepo file to resolve OIDs and update the same OIDrepo file. 
 
 .EXAMPLE
-    Import-MIB -Path .\ThreeParMIB.mib -OIDrepo .\all.oids | Export-Csv -Path .\3PAR.csv            
+    Import-MIB -Path .\ThreeParMIB.mib -OIDrepo .\all.csv | Export-Csv -Path .\3PAR.csv            
     To get output into CSV file
 
 .EXAMPLE
-    Import-MIB -Path .\ThreeParMIB.mib -OIDrepo .\all.oids | Select-Object objectName,objectType,status,description,objects,ID,parent,OID | Export-Csv -Path .\3PAR.csv            
+    Import-MIB -Path .\ThreeParMIB.mib -OIDrepo .\all.csv | Select-Object objectName,objectType,status,description,objects,ID,parent,OID | Export-Csv -Path .\3PAR.csv            
     To get complete output into CSV file
 
 .EXAMPLE
-    cat .\ThreeParMIB.mib | Import-MIB -OIDrepo .\all.oids | Select-Object objectName,objectType,status,description,objects,ID,parent,OID | Export-Csv -Path .\3PAR.csv            
+    cat .\ThreeParMIB.mib | Import-MIB -OIDrepo .\all.csv | Select-Object objectName,objectType,status,description,objects,ID,parent,OID | Export-Csv -Path .\3PAR.csv            
     To get complete output into CSV file
 #>
 
@@ -982,7 +1003,7 @@ function ConvertTo-Snmptrap {
     Module Name    : MIB-Processing  
     Author         : Jiri Kindl; kindl_jiri@yahoo.com
     Prerequisite   : PowerShell V2 over Vista and upper.
-    Version        : 20210116
+    Version        : 20210119
     Copyright 2020 - Jiri Kindl
 .LINK  
     
@@ -995,20 +1016,20 @@ function ConvertTo-Snmptrap {
     Convert CSV file generated by Import-MIB. !NOTE: you need to use -UseCUlture switch with Import-CSV if the CSV file was generated with -UseCulture
 
 .EXAMPLE
-    cat .\ThreeParMIB.mib | Import-MIB -OIDrepo .\myOIDrepo.oids | ConvertTo-Snmptrap
+    cat .\ThreeParMIB.mib | Import-MIB -OIDrepo .\myOIDrepo.csv | ConvertTo-Snmptrap
     To generate snmptrap commands for testing based on ThreeParMIB.mib file
 
 .EXAMPLE
-    cat .\ThreeParMIB.mib | Import-MIB -OIDrepo .\myOIDrepo.oids | ConvertTo-Snmptrap -OIDrepo .\myOIDrepo
+    cat .\ThreeParMIB.mib | Import-MIB -OIDrepo .\myOIDrepo.csv| ConvertTo-Snmptrap -OIDrepo .\myOIDrepo
     To generate snmptrap commands for testing based on ThreeParMIB.mib file and use OIDrepo to resolve objects which are not directly defined in this MIB
 
 .EXAMPLE
-    cat .\ThreeParMIB.mib | Import-MIB -OIDrepo .\myOIDrepo.oids | ConvertTo-Snmptrap -OIDrepo .\myOIDrepo -OIDs
+    cat .\ThreeParMIB.mib | Import-MIB -OIDrepo .\myOIDrepo.csv | ConvertTo-Snmptrap -OIDrepo .\myOIDrepo -OIDs
     To generate snmptrap commands for testing based on ThreeParMIB.mib file and use OIDrepo to resolve objects which are not directly defined in this MIB.
     Also resolves objects/variable names to OIDs, so you can send test trap from device or server where relevant MIB(s) are not loaded.
 
 .EXAMPLE
-    cat .\ThreeParMIB.mib | Import-MIB -OIDrepo .\myOIDrepo.oids | ConvertTo-Snmptrap -SnmpVersion 2
+    cat .\ThreeParMIB.mib | Import-MIB -OIDrepo .\myOIDrepo.csv | ConvertTo-Snmptrap -SnmpVersion 2
     To generate snmptrap commands, with version 2 traps, for testing based on ThreeParMIB.mib file
   #>
 
@@ -1027,7 +1048,8 @@ function ConvertTo-Snmptrap {
     $mib = @()
     $test_string = 'Test string'
     $test_number = 3
-    $test_ip = "10.10.10.10"
+    $test_ip = '10.10.10.10'
+    $test_oid = '0.0'
     try {
       if ($Path) {
         $mib= Import-Csv -Path $Path -ErrorAction Stop
@@ -1131,7 +1153,11 @@ function ConvertTo-Snmptrap {
               $objects_parameters += ' s '
               $objects_parameters += '"' + $test_string + ' ' + $object.objectName + '" '
             }
-
+            #OID
+            elseif ($object.objectSyntax -match 'OBJECT IDENTIFIER') {
+              $objects_parameters += ' o '
+              $objects_parameters += "$test_oid "
+            }
             #Whatever else
             else {
               #Most probably it TEXTUAL-CONVENTION so lets try to search it:
@@ -1173,6 +1199,11 @@ function ConvertTo-Snmptrap {
                   $objects_parameters += ' s '
                   $objects_parameters += '"' + $test_string + ' ' + $object.objectName + '" '
                 }
+                #OIDs
+                elseif ($textual_convention.objectSyntax -match 'OBJECT IDENTIFIER') {
+                  $objects_parameters += ' o '
+                  $objects_parameters += "$test_oid "
+                }
                 else {
                   #esle we stay at UNKNOWN
                   $verboseMessage = "TEXTUAL-CONVENTION: $textual_convention , have UNKNOWN SYNTAX: " + $textual_convention.objectSyntax
@@ -1180,7 +1211,7 @@ function ConvertTo-Snmptrap {
                   $objects_parameters += ' s '
                   $objects_parameters += '"' + $test_string + ' ' + $object.objectName + ' ' + $object.objectSyntax + '" '
                 }
-              }
+              }  
               else {
                 #esle we stay at UNKNOWN
                 Write-Verbose "Unknown object SYNTAX:"
@@ -1260,13 +1291,17 @@ function Get-MIBInfo {
     Module Name    : MIB-Processing  
     Author         : Jiri Kindl; kindl_jiri@yahoo.com
     Prerequisite   : PowerShell V2 over Vista and upper.
-    Version        : 20201027
+    Version        : 20210121
     Copyright 2020 - Jiri Kindl
 .LINK  
     
 .EXAMPLE
     Get-MIB -Path .\SYNOLOGY-SYSTEM-MIB.mib
     Process the MIB and returns basic information, like Module name and revision if available.
+
+.EXAMPLE
+    $mibsInfo = @(); foreach ($mib in ls SYNOLOGY*.mib){$mibsInfo += Get-MIBInfo $mib}; $mibsInfo | Export-Csv -NoTypeInformation SynologyMibsInfo.csv
+    Process all the SYNOLOGY MIBs and Export the info about them in CSV file for later analyses.
 
 #>
 
