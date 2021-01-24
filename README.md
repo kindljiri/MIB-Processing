@@ -5,8 +5,10 @@ Powershell module for processing, analyzing and transforming SNMP MIB files
 To get it work do those:
 Import-Module .\MIB-Processing.psm1
 
-and then for information about functions do:
-Get-Help Import-MIB
-Get-Help Import-MIB -examples
-Get-Help ConvertTo-Snmptrap
-Get-Help ConvertTo-Snmptrap -examples
+List of functions:
+Import-MIB
+Get-MIBInfo
+Is-BackwardsCompatible
+ConvertTo-Snmptrap
+ConvertTo-SMIv1
+ConvertTo-SMIv2
