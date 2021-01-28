@@ -1004,7 +1004,7 @@ function ConvertTo-Snmptrap {
     Module Name    : MIB-Processing  
     Author         : Jiri Kindl; kindl_jiri@yahoo.com
     Prerequisite   : PowerShell V2 over Vista and upper.
-    Version        : 20210119
+    Version        : 20210128
     Copyright 2020 - Jiri Kindl
 .LINK  
     
@@ -1032,6 +1032,13 @@ function ConvertTo-Snmptrap {
 .EXAMPLE
     cat .\ThreeParMIB.mib | Import-MIB -OIDrepo .\myOIDrepo.csv | ConvertTo-Snmptrap -SnmpVersion 2
     To generate snmptrap commands, with version 2 traps, for testing based on ThreeParMIB.mib file
+
+.EXAMPLE
+    foreach ($csv in ls *.csv) {if(Select-String -Quiet "NOTIFICATION-TYPE" $csv){$notif_file = $csv.basename + '.notifs';ConvertTo-Snmptrap -SnmpVersion 2 -OIDs -OIDrepo ..\..\myRepo.csv $csv > $notif_file}}
+    The above command will generate files (.notifs) with SMIv2 snmptrap commands for all the csv files containing "NOTIFICATION-TYPE" 
+.EXAMPLE
+    foreach ($csv in ls *.csv) {if(Select-String -Quiet "TRAP-TYPE" $csv){$trap_file = $csv.basename + '.traps';ConvertTo-Snmptrap -OIDs -OIDrepo ..\..\myRepo.csv $csv > trap_file}}
+    The above command will generate files (.traps) with SMIv1 snmptrap commands for all the csv files containing "TRAP-TYPE" 
   #>
 
   #pars parametrs with param
@@ -1107,7 +1114,7 @@ function ConvertTo-Snmptrap {
             if (!$object) {
               if ($OIDrepo) {
                 foreach ($module in $imported_modules) {
-                  $object = $mibrepo | where {($_.objectName -EQ $object_name -and $_.module -EQ $module)}
+                  $object = $mibrepo | where {($_.objectName -EQ $object_name -and $_.module -EQ $module -and $_.objectType -NE 'TEXTUAL-CONVENTION')}
                   if ($object) {
                     break
                   }
