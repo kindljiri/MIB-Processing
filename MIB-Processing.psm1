@@ -1468,7 +1468,7 @@ function Is-BackwardsCompatible {
     Module Name    : MIB-Processing  
     Author         : Jiri Kindl; kindl_jiri@yahoo.com
     Prerequisite   : PowerShell V2 over Vista and upper.
-    Version        : 202011111
+    Version        : 20211016
     Copyright 2020 - Jiri Kindl
 .LINK  
     
@@ -1553,7 +1553,9 @@ function Is-BackwardsCompatible {
       if ($diffObject.sideIndicator -eq '=>') {
         $compatible = $false
         if ($Details) {
-          $detailMessage = 'Object missing in newer MIB: ' + $diffObject.objectFullName
+          $detailLevel = 3
+          $detailLevelName = 'ERROR: '
+          $detailMessage = $detailLevelName + 'Object missing in newer MIB: ' + $diffObject.objectFullName
           Write-Output $detailMessage
         }
         Write-Verbose "$diffObject"
@@ -1565,11 +1567,13 @@ function Is-BackwardsCompatible {
             if ( -Not ((($diffObject.objects -replace '{', '') -replace '}', '') -replace '\s+', '').StartsWith(((($olderObject.objects -replace '{', '') -replace '}', '') -replace '\s+', '').toString()) ) {
               $compatible = $false
               if ($Details) {
-                $detailMessage = 'Odrer of objects/variables in trap have changed: ' + $diffObject.objectFullName
+                $detailLevel = 2
+                $detailLevelName = 'WARNING: '
+                $detailMessage = '$detailLevelName + Odrer of objects/variables in trap have changed: ' + $diffObject.objectFullName
                 Write-Output $detailMessage
-                $detailMessage = ($diffObject.objects -replace '{', '') -replace '}', ''
+                $detailMessage = "Newer: " + ($diffObject.objects -replace '{', '') -replace '}', ''
                 Write-Output $detailMessage
-                $detailMessage = ($olderObject.objects -replace '{', '') -replace '}', ''
+                $detailMessage = "Older: " + ($olderObject.objects -replace '{', '') -replace '}', ''
                 Write-Output $detailMessage
               }
             }            
@@ -1577,14 +1581,18 @@ function Is-BackwardsCompatible {
           else {
             $compatible = $false
             if ($Details) {
-              $detailMessage = 'OID changed: ' + $olderObject.OID + '(' + $olderObject.objectFullName + ') => ' + $diffObject.OID + '(' + $diffObject.objectFullName +')'
+              $detailLevel = 3
+              $detailLevelName = 'ERROR: '
+              $detailMessage = $detailLevelName + 'OID changed: ' + $olderObject.OID + '(' + $olderObject.objectFullName + ') => ' + $diffObject.OID + '(' + $diffObject.objectFullName +')'
               Write-Output $detailMessage 
             }
           }
         }
         else {
           if ($Details) {
-            $detailMessage = 'New object added: ' + $diffObject.objectFullName
+            $detailLevel = 1
+            $detailLevelName = 'INFO: '
+            $detailMessage = $detailLevelName + 'New object added: ' + $diffObject.objectFullName
             Write-Output $detailMessage
           }
         }
