@@ -4,7 +4,7 @@ function Remove-Comments($lines){
   $linesWithoutComments = @()
   $sa_state = 'init'
   #start with preprocessing
-  $lines = $lines | where {$_.trim() -ne ''}
+  $lines = $lines | Where-Object {$_.trim() -ne ''}
   #remove comments
   $debugMessage = "STARTING REMOVE-COMMENTS"
   Write-Debug $debugMessage
@@ -26,7 +26,7 @@ function Remove-Comments($lines){
 
     #foreach line do this littel state automata
     foreach ($token in $line.split(' ')) {
-      $debugMessage = "Status=$sa_state,Token=$token"
+      $debugMessage = "REMOVE-COMMENTS: Status=$sa_state,Token=$token"
       Write-Debug $debugMessage
       if ($sa_state -eq 'init') {
         if ($token -eq '"'){
@@ -59,7 +59,7 @@ function Remove-Comments($lines){
     }    
     
   }
-  $linesWithoutComments = $linesWithoutComments | where {$_.trim() -ne ''}
+  $linesWithoutComments = $linesWithoutComments | where-object {$_.trim() -ne ''}
   $debugMessage = "ENDING REMOVE-COMMENTS"
   Write-Debug $debugMessage
   return $linesWithoutComments
@@ -89,7 +89,7 @@ function Get-Tokens($linesWithoutComments) {
 
   }
 
-  $preprocessed_lines = $preprocessed_lines | where {$_.trim() -ne ''}
+  $preprocessed_lines = $preprocessed_lines | Where-Object {$_.trim() -ne ''}
   
   foreach ($token in $preprocessed_lines) {
     $token = $token.trim()
@@ -158,7 +158,7 @@ function Parse-MIB($tokens) {
 
   $debugMessage = "STARTING PARSING"
   Write-Debug $debugMessage
-  $debugMessage = "Number of objects in mib: " +$mib.Length 
+  $debugMessage = "PARSING: Number of objects in mib: " +$mib.Length 
   Write-Debug $debugMessage
 
   #below is not used yet (will see if I'll use it later
@@ -169,10 +169,10 @@ function Parse-MIB($tokens) {
   $textaul_convention_clauses = ('DISPLAY-HINT', 'STATUS', 'DESCRIPTION', 'REFERENCE', 'SYNTAX')
   
   #below is union of above arrays + MACRO
-  $expected_type_tokens=('ENTERPRISE','VARIABLES','OBJECTS','SYNTAX','UNITS','MAX-ACCESS','ACCESS','DISPLAY-HINT','STATUS','DESCRIPTION','REFERENCE','INDEX','AUGMENTS','DEFVAL','::=','MACRO','OBJECT-GROUP','NOTIFICATION-GROUP','NOTIFICATIONS')
+  $expected_type_tokens=('ENTERPRISE','VARIABLES','OBJECTS','SYNTAX','UNITS','MAX-ACCESS','ACCESS','DISPLAY-HINT','STATUS','DESCRIPTION','REFERENCE','INDEX','AUGMENTS','DEFVAL','::=','MACRO','OBJECT-GROUP','NOTIFICATION-GROUP','NOTIFICATIONS', 'MODULE-COMPLIANCE')
 
   foreach ($token in $tokens) {
-    $debugMessage = "Currently processing=$currently_processing_macro,Status=$sa_status,Token=$token,Counter=$counter"
+    $debugMessage = "PARSING: Currently processing=$currently_processing_macro,Status=$sa_status,Token=$token,Counter=$counter"
     Write-Debug $debugMessage
     #just for sure
     $token = $token.trim()
@@ -182,15 +182,29 @@ function Parse-MIB($tokens) {
           $module_name = $tokens[$counter-3]
         }
       }
+      #MACRO DEFINITIONS OF BASIC "OBJECTS PRIMITIVES" - SUCH AS OBJECT-TYPE, TRAP-TYPE ...
+      elseif ($tokens[$counter+1] -eq 'MACRO') {
+        $sa_status = 'MACRO'
+        $object_name = $token
+        $counter += 1
+        continue
+      }
       elseif ($token -eq 'IMPORTS') {
         $currently_processing_macro = $token
         $sa_status = 'IMPORTS'
         $imported_modules = '{ '
+        $objects = '{ '
       }
       elseif ($token -eq 'MODULE-IDENTITY') {
         $currently_processing_macro = $token
-        $sa_status = 'MODULE-IDENTITY'
-        $object_type = 'MODULE-IDENTITY'
+        $sa_status = $token
+        $object_type = $token
+        $object_name = $tokens[$counter-1]
+      }
+      elseif ($token -eq 'MODULE-COMPLIANCE') {
+        $currently_processing_macro = $token
+        $sa_status = $token
+        $object_type = $token
         $object_name = $tokens[$counter-1]
       }
       elseif ($token -eq 'IDENTIFIER' -and $tokens[$counter-1] -eq 'OBJECT') {
@@ -247,40 +261,94 @@ function Parse-MIB($tokens) {
         $object_type = $token
         $object_name = $tokens[$counter-2]
       }
+      elseif ($token -eq '::=') {
+        #it's TEXTUAL-CONVENTION with direct SYNTAX
+        #hence $sa_status gonna be syntax
+        #however need to check if 
+        #  not DEFINITIONS ::= BEGIN
+        #  or not proper 'TEXTUAL-CONVENTION' macro
+        if ( ($tokens[$counter-1]+$token+$tokens[$counter+1] -ne 'DEFINITIONS::=BEGIN') -and ($tokens[$counter+1] -ne 'TEXTUAL-CONVENTION')){
+          $sa_status ='SYNTAX'
+          $currently_processing_macro = 'TEXTUAL-CONVENTION'
+          $object_type = 'TEXTUAL-CONVENTION'
+          $object_name = $tokens[$counter-1]
+        }  
+      }
       $object_name = $object_name.trim()
       $counter += 1
-      continue 
+      continue
+
     }
     elseif ($sa_status -eq 'IMPORTS') {
+      if ($token -eq 'FROM') {
+        $sa_status = 'FROM'
+        $counter += 1
+        continue
+      }
+      else {
+        $objects += $token
+        $counter += 1
+        continue
+      }
+    }
+    elseif ($sa_status -eq 'FROM') {
+      $module = $token
+      $module = $module -replace ';', ''
+      $sa_status = 'IMPORTS'
+      $imported_modules += $module + ', '
+      $objects += ' }'
+      $objectProperties = @{ objectName = $module; objectType = 'IMPORT'; objectSyntax = $object_syntax; status = $status; defval = $object_defval; units = $object_units; augments = $object_augments; maxAccess = $object_max_access; reference = $object_reference; index = $object_index ; description = "Objects imported from Module: $module"; objects = $objects; ID = $ID; parent = $parent; OID = $OID; module = $module_name; objectFullName = "$module_name::" }
+      $object = New-Object psobject -Property $objectProperties
+      $mib += $object
+      $debugMessage = "PARSING: Creating Object=$object"
+      Write-Debug $debugMessage
+      $debugMessage = "PARSING: Number of objects in mib: " +$mib.Length 
+      Write-Debug $debugMessage
+      ($object_name,$object_type,$object_syntax,$status,$description,$objects,$ID,$object_max_access,$object_units,$object_reference,$object_index,$object_augments,$object_defval,$notification_objects,$parent,$OID) = ('','','','','','','','','','','','','','','','')
+      $objects = '{ '
       if ($token.endswith(';')) {
         $imported_modules += '}'
-        $imported_modules = $imported_modules -replace ';, }', ' }'
+        $imported_modules = $imported_modules -replace ', }', ' }'
         $objectProperties = @{ objectName = 'IMPORTS'; objectType = 'IMPORTS'; objectSyntax = $object_syntax; status = $status; defval = $object_defval; units = $object_units; augments = $object_augments; maxAccess = $object_max_access; reference = $object_reference; index = $object_index ; description = $description; objects = $imported_modules; ID = $ID; parent = $parent; OID = $OID; module = $module_name; objectFullName = "$module_name::$object_name" }
         $object = New-Object psobject -Property $objectProperties
         $mib += $object
-        $debugMessage = "Creating Object=$object"
+        $debugMessage = "PARSING: Creating Object=$object"
         Write-Debug $debugMessage
-        $debugMessage = "Number of objects in mib: " +$mib.Length 
+        $debugMessage = "PARSING: Number of objects in mib: " +$mib.Length 
         Write-Debug $debugMessage
         ($object_name,$object_type,$object_syntax,$status,$description,$objects,$ID,$object_max_access,$object_units,$object_reference,$object_index,$object_augments,$object_defval,$notification_objects,$parent,$OID) = ('','','','','','','','','','','','','','','','')
         $sa_status = 'init'
-        $counter += 1
-        continue
       }
-      elseif ($token -eq 'FROM') {
-        $imported_modules += $tokens[$counter+1] + ', '
-        $counter += 1
-        continue
-      }
+      $counter += 1
+      continue
     } 
+    #MODULE-COMPLIANCE not fully implemented
+    elseif ($sa_status -eq 'MODULE-COMPLIANCE') {
+      if ($token -eq '::=') {
+        $sa_status = '::='
+        $counter += 1
+        continue
+      }
+      $counter += 1
+      continue
+    }
     elseif ($sa_status -eq 'MODULE-IDENTITY') {
       if ($token -eq '::=') {
         $sa_status = '::='
         $counter += 1
         continue
       }
+      elseif ($token -eq 'DESCRIPTION') {
+        #need to get just first descritption
+        if ($description -eq '') {
+          $description = $tokens[$counter+1]
+        }
+        $counter += 1
+        continue
+      }
       elseif ($token -eq 'MACRO') {
         $sa_status = 'MACRO'
+        $object_name = 'DESCRIPTION'
         $counter += 1
         continue
       }
@@ -291,8 +359,10 @@ function Parse-MIB($tokens) {
         $counter += 1
         continue
       }
+      #HERE THIS MUST BE BECAUSE IN INIT STATE IT LOOKS JUST ONE TOKEN AHEAD
       elseif ($token -eq 'MACRO') {
-        $sa_status='MACRO'
+        $sa_status = 'MACRO'
+        $object_name = 'OBJECT IDENTIFIER'
         $counter += 1
         continue
       }
@@ -367,15 +437,15 @@ function Parse-MIB($tokens) {
         }
       }
       if ($currently_processing_macro -eq 'TEXTUAL-CONVENTION') {
-        if (($tokens[$counter+1] -in ('::=', 'OBJECT-IDENTITY', 'OBJECT-TYPE','NOTIFICATION-TYPE', 'MODULE-COMPLIANCE', 'OBJECT-GROUP','NOTIFICATION-GROUP','END')) -or ($tokens[$counter+3] -eq '::=' -and $tokens[$counter+2] -eq 'IDENTIFIER') ) {
+        if (($tokens[$counter+1] -in ('MODULE-IDENTITY', '::=', 'OBJECT-IDENTITY', 'OBJECT-TYPE','NOTIFICATION-TYPE', 'MODULE-COMPLIANCE', 'OBJECT-GROUP','NOTIFICATION-GROUP','END')) -or ($tokens[$counter+3] -eq '::=' -and $tokens[$counter+2] -eq 'IDENTIFIER') ) {
           $sa_status = 'init'
           $object_syntax = $object_syntax.trim()
           $objectProperties = @{ objectName = $object_name; objectType = $object_type; objectSyntax = $object_syntax; status = $status; defval = $object_defval; units = $object_units; augments = $object_augments; maxAccess = $object_max_access; reference = $object_reference; index = $object_index ; description = $description; objects = $notification_objects; ID = $ID; parent = $parent; OID = $OID; module = $module_name; objectFullName = "$module_name::$object_name" }
           $object = New-Object psobject -Property $objectProperties
           $mib += $object
-          $debugMessage = "Creating Object=$object"
+          $debugMessage = "PARSING: Creating Object=$object"
           Write-Debug $debugMessage
-          $debugMessage = "Number of objects in mib: " +$mib.Length 
+          $debugMessage = "PARSING: Number of objects in mib: " +$mib.Length 
           Write-Debug $debugMessage
           ($object_name,$object_type,$object_syntax,$status,$description,$objects,$ID,$object_max_access,$object_units,$object_reference,$object_index,$object_augments,$object_defval,$notification_objects,$parent,$OID) = ('','','','','','','','','','','','','','','','')
         }
@@ -463,9 +533,9 @@ function Parse-MIB($tokens) {
           $objectProperties = @{ objectName = $object_name; objectType = $object_type; objectSyntax = $object_syntax; status = $status; defval = $object_defval; units = $object_units; augments = $object_augments; maxAccess = $object_max_access; reference = $object_reference; index = $object_index ; description = $description; objects = $notification_objects; ID = $ID; parent = $parent; OID = $OID; module = $module_name; objectFullName = "$module_name::$object_name" }
           $object = New-Object psobject -Property $objectProperties
           $mib += $object
-          $debugMessage = "Creating Object=$object"
+          $debugMessage = "PARSING: Creating Object=$object"
           Write-Debug $debugMessage
-          $debugMessage = "Number of objects in mib: " +$mib.Length 
+          $debugMessage = "PARSING: Number of objects in mib: " +$mib.Length 
           Write-Debug $debugMessage
           ($object_name,$object_type,$object_syntax,$status,$description,$objects,$ID,$object_max_access,$object_units,$object_reference,$object_index,$object_augments,$object_defval,$notification_objects,$parent,$OID) = ('','','','','','','','','','','','','','','','')
         }
@@ -495,9 +565,9 @@ function Parse-MIB($tokens) {
           $objectProperties = @{ objectName = $object_name; objectType = $object_type; objectSyntax = $object_syntax; status = $status; defval = $object_defval; units = $object_units; augments = $object_augments; maxAccess = $object_max_access; reference = $object_reference; index = $object_index ; description = $description; objects = $notification_objects; ID = $ID; parent = $parent; OID = $OID; module = $module_name; objectFullName = "$module_name::$object_name" }
           $object = New-Object psobject -Property $objectProperties
           $mib += $object
-          $debugMessage = "Creating Object=$object"
+          $debugMessage = "PARSING: Creating Object=$object"
           Write-Debug $debugMessage
-          $debugMessage = "Number of objects in mib: " +$mib.Length 
+          $debugMessage = "PARSING: Number of objects in mib: " +$mib.Length 
           Write-Debug $debugMessage
           ($object_name,$object_type,$object_syntax,$status,$description,$objects,$ID,$object_max_access,$object_units,$object_reference,$object_index,$object_augments,$object_defval,$notification_objects,$parent,$OID) = ('','','','','','','','','','','','','','','','')
         }
@@ -528,9 +598,9 @@ function Parse-MIB($tokens) {
           $objectProperties = @{ objectName = $object_name; objectType = $object_type; objectSyntax = $object_syntax; status = $status; defval = $object_defval; units = $object_units; augments = $object_augments; maxAccess = $object_max_access; reference = $object_reference; index = $object_index ; description = $description; objects = $notification_objects; ID = $ID; parent = $parent; OID = $OID; module = $module_name; objectFullName = "$module_name::$object_name" }
           $object = New-Object psobject -Property $objectProperties
           $mib += $object
-          $debugMessage = "Creating Object=$object"
+          $debugMessage = "PARSING: Creating Object=$object"
           Write-Debug $debugMessage
-          $debugMessage = "Number of objects in mib: " +$mib.Length 
+          $debugMessage = "PARSING: Number of objects in mib: " +$mib.Length 
           Write-Debug $debugMessage
           ($object_name,$object_type,$object_syntax,$status,$description,$objects,$ID,$object_max_access,$object_units,$object_reference,$object_index,$object_augments,$object_defval,$notification_objects,$parent,$OID) = ('','','','','','','','','','','','','','','','')
         }
@@ -561,9 +631,9 @@ function Parse-MIB($tokens) {
           $objectProperties = @{ objectName = $object_name; objectType = $object_type; objectSyntax = $object_syntax; status = $status; defval = $object_defval; units = $object_units; augments = $object_augments; maxAccess = $object_max_access; reference = $object_reference; index = $object_index ; description = $description; objects = $notification_objects; ID = $ID; parent = $parent; OID = $OID; module = $module_name; objectFullName = "$module_name::$object_name" }
           $object = New-Object psobject -Property $objectProperties
           $mib += $object
-          $debugMessage = "Creating Object=$object"
+          $debugMessage = "PARSING: Creating Object=$object"
           Write-Debug $debugMessage
-          $debugMessage = "Number of objects in mib: " +$mib.Length 
+          $debugMessage = "PARSING: Number of objects in mib: " +$mib.Length 
           Write-Debug $debugMessage
           ($object_name,$object_type,$object_syntax,$status,$description,$objects,$ID,$object_max_access,$object_units,$object_reference,$object_index,$object_augments,$object_defval,$notification_objects,$parent,$OID) = ('','','','','','','','','','','','','','','','')
         }
@@ -720,9 +790,9 @@ function Parse-MIB($tokens) {
       $objectProperties = @{ objectName = $object_name; objectType = $object_type; objectSyntax = $object_syntax; status = $status; defval = $object_defval; units = $object_units; augments = $object_augments; maxAccess = $object_max_access; reference = $object_reference; index = $object_index ; description = $description; objects = $notification_objects; ID = $ID; parent = $parent; OID = $OID; module = $module_name; objectFullName = "$module_name::$object_name" }
       $object = New-Object psobject -Property $objectProperties
       $mib += $object
-      $debugMessage = "Creating Object=$object"
+      $debugMessage = "PARSING: Creating Object=$object"
       Write-Debug $debugMessage
-      $debugMessage = "Number of objects in mib: " +$mib.Length 
+      $debugMessage = "PARSING: Number of objects in mib: " +$mib.Length 
       Write-Debug $debugMessage
       $sa_status = 'init'
       ($object_name,$object_type,$object_syntax,$status,$description,$objects,$ID,$object_max_access,$object_units,$object_reference,$object_index,$object_augments,$object_defval,$notification_objects,$parent,$OID) = ('','','','','','','','','','','','','','','','')
@@ -732,7 +802,16 @@ function Parse-MIB($tokens) {
     elseif ($sa_status -eq 'MACRO') {
       #just skip MACRO DEFINITION
       if ($token -eq 'END') {
+        #but create and obejct, because of the IMPORT dependencies
+        $objectProperties = @{ objectName = $object_name; objectType = 'MACRO'; objectSyntax = ''; status = ''; description = ''; objects = ''; ID = ''; parent = ''; OID = ''; module = $module_name; objectFullName = "$module_name::$object_name" }
+        $object = New-Object psobject -Property $objectProperties
+        $mib += $object
+        $debugMessage = "PARSING: Creating Object=$object"
+        Write-Debug $debugMessage
+        $debugMessage = "PARSING: Number of objects in mib: " +$mib.Length 
+        Write-Debug $debugMessage
         $sa_status = 'init'
+        ($object_name,$object_type,$object_syntax,$status,$description,$objects,$ID,$object_max_access,$object_units,$object_reference,$object_index,$object_augments,$object_defval,$notification_objects,$parent,$OID) = ('','','','','','','','','','','','','','','','')
       }
       $counter += 1
       continue
@@ -742,9 +821,9 @@ function Parse-MIB($tokens) {
         $objectProperties = @{ objectName = $object_name; objectType = $object_type; objectSyntax = 'SEQUENCE'; status = ''; description = ''; objects = $token; ID = ''; parent = ''; OID = ''; module = $module_name; objectFullName = "$module_name::$object_name" }
         $object = New-Object psobject -Property $objectProperties
         $mib += $object
-        $debugMessage = "Creating Object=$object"
+        $debugMessage = "PARSING: Creating Object=$object"
         Write-Debug $debugMessage
-        $debugMessage = "Number of objects in mib: " +$mib.Length 
+        $debugMessage = "PARSING: Number of objects in mib: " +$mib.Length 
         Write-Debug $debugMessage
         $sa_status = 'init'
         ($object_name,$object_type,$object_syntax,$status,$description,$objects,$ID,$object_max_access,$object_units,$object_reference,$object_index,$object_augments,$object_defval,$notification_objects,$parent,$OID) = ('','','','','','','','','','','','','','','','')
@@ -762,7 +841,7 @@ function Parse-MIB($tokens) {
     }
     $counter += 1
   }
-  $debugMessage = "Number of objects in mib: " +$mib.Length 
+  $debugMessage = "PARSING: Number of objects in mib: " +$mib.Length 
   Write-Debug $debugMessage
   $debugMessage = "END PARSING" 
   Write-Debug $debugMessage
@@ -787,18 +866,20 @@ function Update-OIDRepo($new_mib, $OIDrepo) {
   foreach ($new_object in $new_mib) {
     $newOID = $new_object.OID
     $newObjectFullName = $new_object.objectFullName
-    $module_name = $new_object.module
-    if (!(Is-Full-OID $newOID) -and ($new_object.objectType -ne 'IMPORTS') -and ($new_object.objectType -ne 'SEQUENCE') -and ($new_object.objectType -ne 'TEXTUAL-CONVENTION') ) {
-      echo "ERROR: $newObjectFullName($newOID) is not fully resolved"
+    #$module_name = $new_object.module
+    $excluded_types = ('IMPORTS', 'IMPORT', 'SEQUENCE', 'TEXTUAL-CONVENTION', 'MACRO' )
+    #if (!(Is-Full-OID $newOID) -and ($new_object.objectType -ne 'IMPORTS') -and ($new_object.objectType -ne 'IMPORT') -and ($new_object.objectType -ne 'SEQUENCE') -and ($new_object.objectType -ne 'TEXTUAL-CONVENTION') ) {
+    if (!(Is-Full-OID $newOID) -and ($new_object.objectType -notin $excluded_types )) {
+      Write-Output "ERROR: $newObjectFullName($newOID) is not fully resolved"
     }
-    elseif (!($mibrepo| where {$_.objectFullName -eq $newObjectFullName})) {
+    elseif (!($mibrepo| Where-Object {$_.objectFullName -ceq $newObjectFullName})) {
       $mibrepo += $new_object
       $new_updates = $true
       Write-verbose ($new_object.objectName + " added to $OIDrepo")
     }
     else {
       if ($newOID -ne '') {
-        echo "WARNING: adding $newOID record with same OID already exist in $OIDrepo."
+        Write-Output "WARNING: adding $newOID record with same OID already exist in $OIDrepo."
       }
     }
   }
@@ -829,7 +910,7 @@ function Import-MIB {
     Module Name    : MIB-Processing  
     Author         : Jiri Kindl; kindl_jiri@yahoo.com
     Prerequisite   : PowerShell V2 over Vista and upper.
-    Version        : 20210121
+    Version        : 20220508
     Copyright 2020 - Jiri Kindl
 .LINK  
     
@@ -856,16 +937,19 @@ function Import-MIB {
 .EXAMPLE
     cat .\ThreeParMIB.mib | Import-MIB -OIDrepo .\all.csv | Select-Object objectName,objectType,status,description,objects,ID,parent,OID | Export-Csv -Path .\3PAR.csv            
     To get complete output into CSV file
+.EXAMPLE
+    foreach ($mib in ls *.mib) { $csv = $mib.basename + '.csv'; echo $csv ;Import-MIB $mib -OIDrepo .\cisco-mds-san.csv | export-csv -NoTypeInformation $csv }
+    Convert all MIBs to CSV using OIDrepo     
 #>
 
   #pars parametrs with param
   [CmdletBinding()]
-  param([Parameter(Position=0)][string]$Path, [string]$OIDrepo, [switch]$UpdateOIDRepo, [switch]$silent,
+  param([Parameter(Position=0)][string]$Path, [string]$OIDrepo, [switch]$UpdateOIDRepo, [switch]$HPConfig ,[switch]$silent,
   [parameter(ValueFromPipeline=$true)][string]$pipelineInput)
 
   BEGIN {
     $mib = @()
-    $OIDs = @()
+    #$OIDs = @()
     $lines = @()
 
     if ($OIDrepo) {
@@ -918,12 +1002,12 @@ function Import-MIB {
     $updated = $true
     while ($updated) {
       $updated = $false
-      foreach ($object in $mib | where {$_.OID -ne ''}) {
+      foreach ($object in $mib | Where-Object {$_.OID -ne ''}) {
         $verboseMessage = "Resolving " + $object.objectName
         Write-Verbose "$verboseMessage"
         Write-Debug "$object"
         if (!(($object.OID).split('.')[0] -match "^[\d\.]+$")) {
-          $unresolvedObject = $mib | where {$_.objectName -eq ($object.OID).split('.')[0]  -and  ($_.objectType -ne 'SEQUENCE' -and  $_.objectType -ne 'TEXTUAL-CONVENTION') }
+          $unresolvedObject = $mib | Where-Object {$_.objectName -ceq ($object.OID).split('.')[0]  -and  ($_.objectType -ne 'SEQUENCE' -and  $_.objectType -ne 'TEXTUAL-CONVENTION') }
           if ($unresolvedObject) {
             $verboseMessage = "Got parent " + $unresolvedObject.objectName
             Write-Verbose "$verboseMessage"
@@ -941,23 +1025,61 @@ function Import-MIB {
     if ($OIDRepo) {
       Write-Verbose "OID Repository resolution"
       $mibrepo=Import-CSV $OIDrepo
-      foreach ($object in $mib | where {$_.OID -ne ''}) {
+
+      #Check if required imports are part of OID Repo:
+      if ($UpdateOIDRepo) {
+        $can_be_translated = $true
+        $missingDependeincies = ''
+        foreach ($import in $mib | Where-Object {$_.objectType -eq "IMPORT"}) {
+          foreach ($imported_object in (($import.objects -replace '{ ', '') -replace ' }', '') -split ',' ){
+            $imported_object_fn = $import.objectName + "::" + $imported_object
+            $verboseMessage = "Checking if the imported object is in OIDrepo " + $imported_object_fn
+            Write-Verbose "$verboseMessage"
+            $repo_SearchResults = $mibrepo | Where-Object {$_.objectFullName -ceq $imported_object_fn}
+            if (!$repo_SearchResults) {
+              $can_be_translated = $false
+              $verboseMessage = "Missing dependency: " + $imported_object_fn
+              Write-Verbose "$verboseMessage"
+              $missingDependeincies += "$imported_object_fn,"
+            }
+            if (!$can_be_translated) {
+              $errorMessage = "Missing dependency for: $Path; Depencies: $missingDependeincies"
+              Write-Error $errorMessage -ErrorAction Stop
+            }
+          }
+        }
+      }
+      #Try to translate OID to absolute whole OID (numbers and dots only)
+      foreach ($object in $mib | Where-Object {$_.OID -ne ''}) {
         $oid=$object.OID
+        Write-Verbose "Resolving: $OID"
         $object_name_to_search = $oid.split('.')[0]
-        $repo_SearchResults = $mibrepo | where {$_.objectName -eq $object_name_to_search}
-        $imported_objects = ($mib | where {$_.objectName -eq 'IMPORTS'}).objects
+        Write-Verbose "Looking for: $object_name_to_search"
+        $repo_SearchResults = $mibrepo | Where-Object {$_.objectName -ceq $object_name_to_search}
+        $imported_objects = ($mib | Where-Object {$_.objectName -eq 'IMPORTS'}).objects
         $imported_objects = $imported_objects -replace '{', ''
         $imported_objects = $imported_objects -replace '}', ''
         $imported_objects = $imported_objects -replace ' ', ''
         if ($repo_SearchResults) {
+          Write-Verbose "Got results from repo: $repo_SearchResults"
           foreach ($repo_SearchResult in $repo_SearchResults) {
             if ($imported_objects.split(',') -contains $repo_SearchResult.module){
               $resolvedOID = $repo_SearchResult.OID
               $newOID = $oid -replace $object_name_to_search, $resolvedOID
               $object.OID = $newOID
+              Write-Verbose "Resolved to: $newOID"
               break
             }
           }
+          #Because some MIB authors don't believe in IMPORT or IMPORT enterprises is too main stream they define whole structure in their MIB
+          #Hence need to hardcode here iso to be 1
+          if ($object_name_to_search -ceq 'iso') {
+            Write-Verbose "Resolving iso"
+            $resolvedOID = '1'
+            $newOID = $oid -replace $object_name_to_search, $resolvedOID
+            $object.OID = $newOID
+          }
+          Write-Verbose "Got results from repo: $repo_SearchResults"
         }
         else {
           Write-Verbose "ERROR: $object_name_to_search from $Path not found in $OIDrepo"
@@ -1091,13 +1213,13 @@ function ConvertTo-Snmptrap {
       Write-Verbose "OID Repository resolution"
       $mibrepo=Import-CSV $OIDrepo
       
-      $imported_modules = ($mib | where {$_.objectName -eq 'IMPORTS'}).objects
+      $imported_modules = ($mib | Where-Object {$_.objectName -eq 'IMPORTS'}).objects
       $imported_modules = ((($imported_modules -replace '{', '') -replace '}', '') -replace ' ', '').split(',')
       #Write-Verbose "Importeds modules"
       #$imported_modules 
     }
     
-    $traps = $mib | where {($_.objectType -EQ "TRAP-TYPE" -or $_.objectType -EQ "NOTIFICATION-TYPE")}
+    $traps = $mib | Where-Object {($_.objectType -EQ "TRAP-TYPE" -or $_.objectType -EQ "NOTIFICATION-TYPE")}
     if ($traps) {
       #$traps
       foreach ($trap in $traps) {
@@ -1109,12 +1231,12 @@ function ConvertTo-Snmptrap {
         if ($object_names -ne '') {
           foreach ($object_name in $object_names) {
             $object_name = $object_name.trim()
-            $object = $mib | where {($_.objectName -EQ $object_name)}
+            $object = $mib | Where-Object {($_.objectName -EQ $object_name)}
 
             if (!$object) {
               if ($OIDrepo) {
                 foreach ($module in $imported_modules) {
-                  $object = $mibrepo | where {($_.objectName -EQ $object_name -and $_.module -EQ $module -and $_.objectType -NE 'TEXTUAL-CONVENTION')}
+                  $object = $mibrepo | Where-Object {($_.objectName -EQ $object_name -and $_.module -EQ $module -and $_.objectType -NE 'TEXTUAL-CONVENTION')}
                   if ($object) {
                     break
                   }
@@ -1169,11 +1291,11 @@ function ConvertTo-Snmptrap {
             #Whatever else
             else {
               #Most probably it TEXTUAL-CONVENTION so lets try to search it:
-              $textual_convention = $mib | where {$_.objectName -eq $object.objectSyntax -and $_.objectType -eq 'TEXTUAL-CONVENTION'}
+              $textual_convention = $mib | Where-Object {$_.objectName -eq $object.objectSyntax -and $_.objectType -eq 'TEXTUAL-CONVENTION'}
               if (!$textual_convention) {
                 if ($OIDrepo) {
                   foreach ($module in $imported_modules) {
-                    $textual_convention = $mibrepo | where {($_.objectName -EQ $object.objectSyntax -and $_.objectType -eq 'TEXTUAL-CONVENTION')}
+                    $textual_convention = $mibrepo | Where-Object {($_.objectName -EQ $object.objectSyntax -and $_.objectType -eq 'TEXTUAL-CONVENTION')}
                     if ($textual_convention) {
                       break
                     }
@@ -1247,11 +1369,11 @@ function ConvertTo-Snmptrap {
             Write-Verbose "Unsupported SnmpVersion setting v1"
           }
 
-          $parent = $mib | where {$_.objectName -eq $trap.parent} 
+          $parent = $mib | Where-Object {$_.objectName -ceq $trap.parent} 
           #try to check the oidrepo if it's there
           if (!$parent) {
             if ($OIDrepo) {
-              $parent = $mibrepo | where {$_.objectName -eq $trap.parent} 
+              $parent = $mibrepo | Where-Object {$_.objectName -ceq $trap.parent} 
             }
           }
           #Just do fallback if it cannot find parent anywhere it's for cases like (parent = netapp.0)
@@ -1304,7 +1426,7 @@ function Get-MIBInfo {
 .LINK  
     
 .EXAMPLE
-    Get-MIB -Path .\SYNOLOGY-SYSTEM-MIB.mib
+    Get-MIBInfo -Path .\SYNOLOGY-SYSTEM-MIB.mib
     Process the MIB and returns basic information, like Module name and revision if available.
 
 .EXAMPLE
@@ -1348,8 +1470,8 @@ function Get-MIBInfo {
     $description = ''
     $revisions = @()
     $revision_numbers = @()
-    $last_revision = ''
-
+    $latest_revision = ''
+    $imports = @()
 
     Write-verbose "Removing Comments"
     $noCommentLines = Remove-Comments $lines
@@ -1359,7 +1481,7 @@ function Get-MIBInfo {
     $tokens = Get-Tokens $noCommentLines
     Write-verbose "MIB Parsed to tokens"
 
-    $fileInfo = ls $Path
+    $fileInfo = Get-ChildItem $Path
     
     Foreach ($token in $tokens) {
       if ($sa_status -eq 'init') {
@@ -1372,7 +1494,41 @@ function Get-MIBInfo {
           $sa_status = 'process_module_identity'
           $token_counter += 1
           continue
-        } 
+        }
+        elseif ($token -eq 'IMPORTS') {
+          $imported_objects = ''
+          $sa_status = 'process_imports'
+          $token_counter += 1
+          continue
+        }
+      }
+      elseif ($sa_status -eq 'process_imports') {
+        if ($token -eq 'FROM') {
+          $sa_status = 'process_imports_from'
+          $token_counter += 1
+          continue
+        }
+        else {
+          $imported_objects += $token
+          $token_counter += 1
+          continue
+        }
+      }
+      elseif ($sa_status -eq 'process_imports_from') {
+        if ($token.endswith(';')) {
+          $sa_status = 'init'
+          $imported_modul = $token -replace ';', ''
+        }
+        else {
+          $sa_status = 'process_imports'
+          $imported_modul = $token
+        }
+        foreach ($imported_object in $imported_objects -split ',' ){
+          $imports += $imported_modul + '::' + $imported_object
+        }
+        $token_counter += 1
+        $imported_objects = ''
+        continue
       }
       elseif ($sa_status -eq 'process_module_identity') {
         if ($token -eq 'LAST-UPDATED') {
@@ -1427,7 +1583,7 @@ function Get-MIBInfo {
           $revision = New-Object psobject -Property $revisionProperties
           $revisions += $revision
           if ($revision_numbers.Length -gt 1) {
-            $latest_revision = ($revision_numbers |sort)[-1]
+            $latest_revision = ($revision_numbers |Sort-Object)[-1]
           }
           elseif ($revision_numbers.Length -eq 1) {
             $latest_revision = $revision_numbers[0]
@@ -1439,7 +1595,9 @@ function Get-MIBInfo {
       $token_counter += 1
     }
     $file_hash = Get-FileHash $Path
-    $objectProperties = @{ fileFullName = $fileInfo.FullName; fileName = $fileInfo.Name; fileSize = $fileInfo.Length; moduleName = $module_name; lastUpdated = $last_updated; revisions = $revisions; latestRevision = $latest_revision; description = $description; organization = $organization; contact = $contac_info; fileHash = $file_hash.Hash }
+    $imports_string = '{' + ($imports -join ',') + '}'
+    $revisions_string = '{' + ($revisions -join ',') + '}'
+    $objectProperties = @{ fileFullName = $fileInfo.FullName; fileName = $fileInfo.Name; fileSize = $fileInfo.Length; moduleName = $module_name; lastUpdated = $last_updated; revisions = $revisions_string; latestRevision = $latest_revision; description = $description; organization = $organization; contact = $contac_info; fileHash = $file_hash.Hash; imports = $imports_string }
     $MIBFileInfo = New-Object psobject -Property $objectProperties
     $MIBFileInfo  
     
@@ -1451,9 +1609,9 @@ function Is-BackwardsCompatible {
 .SYNOPSIS  
     Check if two MIBs, newer and older are bacwards compatible, return True if they are.
 .DESCRIPTION  
-    Check if two MIBs, newer and older are backwards compatible, return True if they are and false if not.
-    Checks if all objects from older are in newer with same OID, if Trap/Notification also check that all Variables from older are in newer and in same order.
-    Use rather csv exports of MIBs rahter then MIBs. It's quicker.
+    Check if two MIBs, newer and older, are backwards compatible, return True if they are and false if not.
+    As there is no official criteria for compatibility it pretty much depends on the tool and purpose.
+    Hence below in parametrs we define the Compatibility level.
     
 .PARAMETER newer
     The path and file name of a newer mib file or csv (generated for that mib).
@@ -1461,14 +1619,31 @@ function Is-BackwardsCompatible {
 .PARAMETER older
     The path and file name of a newer mib file or csv (generated for that mib).
 
-.PARAMETER details
-    Prints out detail info about results, so you know what's new in the MIB or what is missing.
+.PARAMETER DetailLevel
+    Prints out detail info about results, so you know what's new in the MIB or what is missing, level 0 is default
+    0 - No info, just True/False
+    1 - Corresponding to Compatibility level 1  
+    2 - Corresponding to Compatibility level 2  
+    3 - Corresponding to Compatibility level 3
+    4 - Print also newly added objects/traps/notifications   
+
+.PARAMETER IgnoreSMIVersion
+    If set it checks objectName (ignoring module name) instead of objectFullName
+
+.PARAMETER CompatibilityLevel
+    Level of compatibility defines what differencies we consider to be compatible, level 3 is default
+    1 - We check just names of the objects/traps/notifications missing in newer MIB
+    2 - We check the OIDs of object with same name is having also same OID
+    3 - We check the Order of the objects/variables in traps/notifications are in same order
     
+.PARAMETER Stats
+    Prints out the statistick how much of the MIB is "same".  
+
 .NOTES  
     Module Name    : MIB-Processing  
     Author         : Jiri Kindl; kindl_jiri@yahoo.com
     Prerequisite   : PowerShell V2 over Vista and upper.
-    Version        : 20211016
+    Version        : 20220328
     Copyright 2020 - Jiri Kindl
 .LINK  
     
@@ -1480,7 +1655,7 @@ function Is-BackwardsCompatible {
 
   #parse parametrs with param
   [CmdletBinding()]
-  param([string]$Newer, [string]$Older, [switch]$Details)
+  param([string]$Newer, [string]$Older, [int]$DetailLevel=0, [switch]$IgnoreSMIVersion, [int]$CompatibilityLevel=3, [switch]$Stats)
 
   BEGIN {
     $lines = @()
@@ -1488,7 +1663,7 @@ function Is-BackwardsCompatible {
 
     try {
       if ($Newer) {
-        $newerFile = ls $Newer -ErrorAction Stop
+        $newerFile = Get-ChildItem $Newer -ErrorAction Stop
         if ($newerFile.Extension -eq '.mib') {
           $newerMib = Import-MIB $newerFile
         }
@@ -1518,7 +1693,7 @@ function Is-BackwardsCompatible {
     }
     try {
       if ($Older) {
-        $olderFile = ls $Older -ErrorAction Stop
+        $olderFile = Get-ChildItem $Older -ErrorAction Stop
         if ($olderFile.Extension -eq '.mib') {
           $olderMib = Import-MIB $olderFile
         }
@@ -1548,51 +1723,98 @@ function Is-BackwardsCompatible {
     }
   }
   PROCESS {
+    $props=@("objectFullName")
+    if ($IgnoreSMIVersion) {
+      $props=@("objectName")
+    }
+
     $compatible = $true
-    foreach ($diffObject in compare-object $newerMib $olderMib -PassThru) {
+    $number_of_comon_objects=0
+
+    foreach ($diffObject in compare-object $newerMib $olderMib -PassThru -Property $props -IncludeEqual -CaseSensitive) {
+      #CHECK: if missing in new
       if ($diffObject.sideIndicator -eq '=>') {
+        
         $compatible = $false
-        if ($Details) {
-          $detailLevel = 3
-          $detailLevelName = 'ERROR: '
-          $detailMessage = $detailLevelName + 'Object missing in newer MIB: ' + $diffObject.objectFullName
-          Write-Output $detailMessage
-        }
-        Write-Verbose "$diffObject"
-      }
-      else {
-        $olderObject = $olderMib | where {$_.objectFullName -eq $diffObject.objectFullName}
-        if ($olderObject) {
-          if ($olderObject.OID -eq $diffObject.OID) {
-            if ( -Not ((($diffObject.objects -replace '{', '') -replace '}', '') -replace '\s+', '').StartsWith(((($olderObject.objects -replace '{', '') -replace '}', '') -replace '\s+', '').toString()) ) {
-              $compatible = $false
-              if ($Details) {
-                $detailLevel = 2
-                $detailLevelName = 'WARNING: '
-                $detailMessage = '$detailLevelName + Odrer of objects/variables in trap have changed: ' + $diffObject.objectFullName
-                Write-Output $detailMessage
-                $detailMessage = "Newer: " + ($diffObject.objects -replace '{', '') -replace '}', ''
-                Write-Output $detailMessage
-                $detailMessage = "Older: " + ($olderObject.objects -replace '{', '') -replace '}', ''
-                Write-Output $detailMessage
-              }
-            }            
+        if ($DetailLevel -gt 0) { 
+          $newerObject = $newerMib | Where-Object {$_.OID -ne ''} |where-object {$_.objectType -ne 'MODULE-COMPLIANCE'} |Where-Object {$_.OID -eq $diffObject.OID }
+          #CHECK: if there is object with same OID it might not be missing but it might be renamed
+          if ($newerObject){
+            $detailLevelName = 'ERROR: '
+            $detailMessage = $detailLevelName + 'Object with same OID and diferent name(possibly name of object change): ' + $diffObject.objectFullName 
+            Write-Output $detailMessage
+            Write-Output "= Older object ======================================"
+            $diffObject
+            Write-Output ""
+            Write-Output "= Newer object ======================================"
+            $newerObject
+            Write-Output "====================================================="
           }
           else {
-            $compatible = $false
-            if ($Details) {
-              $detailLevel = 3
-              $detailLevelName = 'ERROR: '
-              $detailMessage = $detailLevelName + 'OID changed: ' + $olderObject.OID + '(' + $olderObject.objectFullName + ') => ' + $diffObject.OID + '(' + $diffObject.objectFullName +')'
-              Write-Output $detailMessage 
+            $detailLevelName = 'ERROR: '
+            $detailMessage = $detailLevelName + 'Object missing in newer MIB: ' + $diffObject.objectFullName
+            Write-Output $detailMessage
+          }
+
+        }
+        
+      }
+      #OBJECT IS IN BOTH MIBs
+      else {
+        #Set comaprision critira for names Depending on SMI version
+        if ($IgnoreSMIVersion) {
+          $olderObject = $olderMib | Where-Object {$_.objectName -eq $diffObject.objectName -and $_.objectType -eq $diffObject.objectType}
+        }
+        else {
+          $olderObject = $olderMib | Where-Object {$_.objectFullName -eq $diffObject.objectFullName  -and $_.objectType -eq $diffObject.objectType}
+        }
+
+        if ($olderObject) {
+          $number_of_comon_objects++ 
+          #CHECK IF OBJECTS WITH SAME NAME DO HAVE SAME OID:
+          if ($olderObject.OID -eq $diffObject.OID) {
+            #FOR SAME OIDS:
+            if ($CompatibilityLevel -gt 2) {
+              if ( -Not ((($diffObject.objects -replace '{', '') -replace '}', '') -replace '\s+', '').StartsWith(((($olderObject.objects -replace '{', '') -replace '}', '') -replace '\s+', '').toString()) ) {
+                $compatible = $false
+                if ($DetailLevel -gt 2) {
+                  $detailLevelName = 'WARNING: '
+                  $detailMessage = $detailLevelName + 'Odrer of objects/variables in trap have changed: ' + $diffObject.objectFullName
+                  Write-Output $detailMessage
+                  $detailMessage = "Newer: " + ($diffObject.objects -replace '{', '') -replace '}', ''
+                  Write-Output $detailMessage
+                  $detailMessage = "Older: " + ($olderObject.objects -replace '{', '') -replace '}', ''
+                  Write-Output $detailMessage
+                }
+              }            
+            }
+          }
+          else {
+            #OIDs ARE DIFFERENT:
+            if ($CompatibilityLevel -gt 1) {
+              $compatible = $false
+              if ($DetailLevel -gt 1)  {
+                $detailLevelName = 'ERROR: '
+                $detailMessage = $detailLevelName + 'OID changed: ' + $olderObject.OID + '(' + $olderObject.objectFullName + ') => ' + $diffObject.OID + '(' + $diffObject.objectFullName +')'
+                # DEBUG BEGIN
+                # Write-Output "= Older ======================================================"
+                # $olderObject
+                # $olderObject |measure
+                # Write-Output ""
+                # Write-Output "= Diff object ================================================"
+                # $diffObject
+                # Write-Output "=============================================================="
+                # DBUGE END
+                Write-Output $detailMessage 
+              }
             }
           }
         }
+        #NEW OBJECT - JUST INFO
         else {
-          if ($Details) {
-            $detailLevel = 1
+          if ($DetailLevel -gt 3)  {
             $detailLevelName = 'INFO: '
-            $detailMessage = $detailLevelName + 'New object added: ' + $diffObject.objectFullName
+            $detailMessage = $detailLevelName + 'New object added: ' + $diffObject.objectFullName + '(' + $diffObject.OID + ')'
             Write-Output $detailMessage
           }
         }
@@ -1600,6 +1822,14 @@ function Is-BackwardsCompatible {
     }
   }
   END {
+    if ($stats) {
+      $number_of_objects_in_newer=($newerMib |Measure-Object).count
+      $number_of_objects_in_older=($olderMib |Measure-Object).count
+      Write-Output "STATS: "
+      Write-Output "Objects in newer : $number_of_objects_in_newer"
+      Write-Output "Objects in older : $number_of_objects_in_older"
+      Write-Output "Objects in both  : $number_of_comon_objects"
+    }
     return $compatible
   }
 }
@@ -1621,7 +1851,7 @@ function ConvertTo-SMIv1 {
     Module Name    : MIB-Processing  
     Author         : Jiri Kindl; kindl_jiri@yahoo.com
     Prerequisite   : PowerShell V2 over Vista and upper.
-    Version        : 20210124
+    Version        : 20220331
     Copyright 2020 - Jiri Kindl
 .LINK  
     
@@ -1637,12 +1867,10 @@ function ConvertTo-SMIv1 {
     cat .\ThreeParMIB.mib | Import-MIB -OIDrepo .\myOIDrepo.csv | ConvertTo-SMIv1     
 
 .EXAMPLE
-    Import-MIB .\ThreeParMIB.mib -OIDrepo .\myOIDrepo.csv| | ConvertTo-SMIv1 
+    Import-MIB .\ThreeParMIB.mib -OIDrepo .\myOIDrepo.csv| ConvertTo-SMIv1 
 
 .EXAMPLE
-    Import-MIB .\ThreeParMIB.mib -OIDrepo .\myOIDrepo.csv| | ConvertTo-SMIv1 | Add-Content ThreeParMIB-v1.mib
-    If you remove all the Definition Except IMPORTS and MODULE-IDENTITY (in example above ThreeParMIB-v1.mib) you can use above to append SMIv1 definitions into it.
-    Then just add END at the end of the file and you are done.
+    Import-MIB .\ThreeParMIB.mib -OIDrepo .\myOIDrepo.csv| ConvertTo-SMIv1 |Out-File -Encoding "ASCII" .\ThreeParMIB-SMIv1.mib
 
   #>
 
@@ -1677,108 +1905,130 @@ function ConvertTo-SMIv1 {
     }
   }
   END {
+    $TextToPrint = '-- THIS MIB IS GENERATED AUTOMATICALLY BY ConvertTo-SMIv1'
+    Write-Output $TextToPrint
+    Write-Output ''
+    
+    $imports = $mib | Where-Object { $_.objectType -eq "IMPORTS"} 
+    $TextToPrint = $imports.module + " DEFINITIONS ::= BEGIN"
+    Write-Output $TextToPrint
+    Write-Output ''
+
     foreach ($object in $mib) {
       if ($object.objectType -eq 'IMPORTS') {
         #not implemented and not possible yet in this version of Import-MIB
+        Write-Output '-- IMPORT IS YET NOT IMPLEMENTED IN THI VERSION'
+        Write-Output 'IMPORTS'
+        #have to add TRAP-TYPE definition for proper traps definitions
+        Write-Output '    TRAP-TYPE'
+        Write-Output '        FROM RFC-1215'
+        Write-Output '-- Add copy of import section from original MIB file'
+
+        Write-Output ''
       }
       elseif ($object.objectType -eq 'MODULE-IDENTITY') {
-        #not implemented and not possible yet in this version of Import-MIB
+        #MODULE-IDENTITY doesn' exist in SMIv1 but it can be emulated as OBJECT IDENTIFIER
+        $TextToPrint = $object.objectName + ' OBJECT IDENTIFIER ::= { ' + $object.parent + ' ' + $object.ID + ' }'
+        Write-Output $TextToPrint
+        Write-Output ''
       }
       elseif ($object.objectType -eq 'NOTIFICATION-GROUP') {
         $TextToPrint = $object.objectName + ' NOTIFICATION-GROUP' 
-        echo $TextToPrint  
+        Write-Output $TextToPrint  
         $TextToPrint = '  NOTIFICATIONS ' + $object.objects  
-        echo $TextToPrint 
+        Write-Output $TextToPrint 
         $TextToPrint = '  STATUS ' + $object.status 
-        echo $TextToPrint
+        Write-Output $TextToPrint
         $TextToPrint = '  DESCRIPTION ' + $object.description 
-        echo $TextToPrint
+        Write-Output $TextToPrint
         $TextToPrint = '  ::= { ' + $object.parent + ' ' + $object.ID + ' }'
-        echo $TextToPrint
-        echo ''
+        Write-Output $TextToPrint
+        Write-Output ''
       }
       elseif ($object.objectType -eq 'NOTIFICATION-TYPE') {
         #Printing Trap because translating to SMIv1
         $TextToPrint = $object.objectName + ' TRAP-TYPE' 
-        echo $TextToPrint
+        Write-Output $TextToPrint
         $TextToPrint = '  ENTERPRISE ' + $object.parent
-        echo $TextToPrint
+        Write-Output $TextToPrint
         $TextToPrint = '  VARIABLES ' + $object.objects
-        echo $TextToPrint
+        Write-Output $TextToPrint
         $TextToPrint = '  DESCRIPTION ' + $object.description 
-        echo $TextToPrint
+        Write-Output $TextToPrint
         $TextToPrint = '  ::= ' + $object.ID
-        echo $TextToPrint
-        echo ''
+        Write-Output $TextToPrint
+        Write-Output ''
       }
       elseif ($object.objectType -eq 'OBJECT IDENTIFIER') {
         #netPMLmgmt			OBJECT IDENTIFIER ::= { netPML 2 }
         $TextToPrint = $object.objectName + ' OBJECT IDENTIFIER ::= { ' + $object.parent + ' ' + $object.ID + ' }'
-        echo $TextToPrint
-        echo ''
+        Write-Output $TextToPrint
+        Write-Output ''
       }
       elseif ($object.objectType -eq 'OBJECT-GROUP') {
         $TextToPrint = $object.objectName + ' OBJECT-GROUP' 
-        echo $TextToPrint  
+        Write-Output $TextToPrint  
         $TextToPrint = '  OBJECTS ' + $object.objects  
-        echo $TextToPrint 
+        Write-Output $TextToPrint 
         $TextToPrint = '  STATUS ' + $object.status 
-        echo $TextToPrint
+        Write-Output $TextToPrint
         $TextToPrint = '  DESCRIPTION ' + $object.description 
-        echo $TextToPrint
+        Write-Output $TextToPrint
         $TextToPrint = '  ::= { ' + $object.parent + ' ' + $object.ID + ' }'
-        echo $TextToPrint
-        echo ''
+        Write-Output $TextToPrint
+        Write-Output ''
       }
       elseif ($object.objectType -eq 'OBJECT-TYPE') {
         $TextToPrint = $object.objectName + ' OBJECT-TYPE' 
-        echo $TextToPrint  
+        Write-Output $TextToPrint  
         $TextToPrint = '  SYNTAX ' + $object.objectSyntax  
-        echo $TextToPrint 
+        Write-Output $TextToPrint 
         $TextToPrint = '  ACCESS ' + $object.maxAccess 
-        echo $TextToPrint 
+        Write-Output $TextToPrint 
         $TextToPrint = '  STATUS ' + $object.status 
-        echo $TextToPrint
+        Write-Output $TextToPrint
         $TextToPrint = '  DESCRIPTION ' + $object.description 
-        echo $TextToPrint
+        Write-Output $TextToPrint
         $TextToPrint = '  ::= { ' + $object.parent + ' ' + $object.ID + ' }'
-        echo $TextToPrint
-        echo ''
+        Write-Output $TextToPrint
+        Write-Output ''
       }
       elseif ($object.objectType -eq 'SEQUENCE') {
         $TextToPrint = $object.objectName + ' ::= SEQUENCE ' + $object.objects
-        echo $TextToPrint
-        echo ''
+        Write-Output $TextToPrint
+        Write-Output ''
       }
       elseif ($object.objectType -eq 'TEXTUAL-CONVENTION') {
         $TextToPrint = $object.objectName + ' ::= TEXTUAL-CONVENTION'
-        echo $TextToPrint
+        Write-Output $TextToPrint
         $TextToPrint = '  STATUS ' + $object.status 
-        echo $TextToPrint
+        Write-Output $TextToPrint
         $TextToPrint = '  DESCRIPTION ' + $object.description 
-        echo $TextToPrint
+        Write-Output $TextToPrint
         $TextToPrint = '  SYNTAX ' + $object.objectSyntax  
-        echo $TextToPrint 
-        echo ''
+        Write-Output $TextToPrint 
+        Write-Output ''
       }
       elseif ($object.objectType -eq 'TRAP-TYPE') {
         $TextToPrint = $object.objectName + ' TRAP-TYPE' 
-        echo $TextToPrint
+        Write-Output $TextToPrint
         $TextToPrint = '  ENTERPRISE ' + $object.parent
-        echo $TextToPrint
+        Write-Output $TextToPrint
         $TextToPrint = '  VARIABLES ' + $object.objects
-        echo $TextToPrint
+        Write-Output $TextToPrint
         $TextToPrint = '  DESCRIPTION ' + $object.description 
-        echo $TextToPrint
+        Write-Output $TextToPrint
         $TextToPrint = '  ::= ' + $object.ID
-        echo $TextToPrint
-        echo ''      
+        Write-Output $TextToPrint
+        Write-Output ''      
       }
       else {
         #Unknown or not implemented ObjectType
       }
 
     }
+  
+    Write-Output 'END'
   }
 }
 
@@ -1864,93 +2114,93 @@ function ConvertTo-SMIv2 {
       }
       elseif ($object.objectType -eq 'NOTIFICATION-GROUP') {
         $TextToPrint = $object.objectName + ' NOTIFICATION-GROUP' 
-        echo $TextToPrint  
+        Write-Output $TextToPrint  
         $TextToPrint = '  NOTIFICATIONS ' + $object.objects  
-        echo $TextToPrint 
+        Write-Output $TextToPrint 
         $TextToPrint = '  STATUS ' + $object.status 
-        echo $TextToPrint
+        Write-Output $TextToPrint
         $TextToPrint = '  DESCRIPTION ' + $object.description 
-        echo $TextToPrint
+        Write-Output $TextToPrint
         $TextToPrint = '  ::= { ' + $object.parent + ' ' + $object.ID + ' }'
-        echo $TextToPrint
-        echo ''
+        Write-Output $TextToPrint
+        Write-Output ''
       }
       elseif ($object.objectType -eq 'NOTIFICATION-TYPE') {
         $TextToPrint = $object.objectName + ' NOTIFICATION-TYPE' 
-        echo $TextToPrint
+        Write-Output $TextToPrint
         $TextToPrint = '  OBJECTS ' + $object.objects
-        echo $TextToPrint
+        Write-Output $TextToPrint
         $TextToPrint = '  STATUS ' + $object.status 
-        echo $TextToPrint
+        Write-Output $TextToPrint
         $TextToPrint = '  DESCRIPTION ' + $object.description 
-        echo $TextToPrint
+        Write-Output $TextToPrint
         $TextToPrint = '  ::= { ' + $object.parent + ' ' + $object.ID + ' }'
-        echo $TextToPrint
-        echo ''
+        Write-Output $TextToPrint
+        Write-Output ''
       }
       elseif ($object.objectType -eq 'OBJECT IDENTIFIER') {
         #netPMLmgmt			OBJECT IDENTIFIER ::= { netPML 2 }
         $TextToPrint = $object.objectName + ' OBJECT IDENTIFIER ::= { ' + $object.parent + ' ' + $object.ID + ' }'
-        echo $TextToPrint
-        echo ''
+        Write-Output $TextToPrint
+        Write-Output ''
       }
       elseif ($object.objectType -eq 'OBJECT-GROUP') {
         $TextToPrint = $object.objectName + ' OBJECT-GROUP' 
-        echo $TextToPrint  
+        Write-Output $TextToPrint  
         $TextToPrint = '  OBJECTS ' + $object.objects  
-        echo $TextToPrint 
+        Write-Output $TextToPrint 
         $TextToPrint = '  STATUS ' + $object.status 
-        echo $TextToPrint
+        Write-Output $TextToPrint
         $TextToPrint = '  DESCRIPTION ' + $object.description 
-        echo $TextToPrint
+        Write-Output $TextToPrint
         $TextToPrint = '  ::= { ' + $object.parent + ' ' + $object.ID + ' }'
-        echo $TextToPrint
-        echo ''
+        Write-Output $TextToPrint
+        Write-Output ''
       }
       elseif ($object.objectType -eq 'OBJECT-TYPE') {
         $TextToPrint = $object.objectName + ' OBJECT-TYPE' 
-        echo $TextToPrint  
+        Write-Output $TextToPrint  
         $TextToPrint = '  SYNTAX ' + $object.objectSyntax  
-        echo $TextToPrint 
+        Write-Output $TextToPrint 
         $TextToPrint = '  ACCESS ' + $object.maxAccess 
-        echo $TextToPrint 
+        Write-Output $TextToPrint 
         $TextToPrint = '  STATUS ' + $object.status 
-        echo $TextToPrint
+        Write-Output $TextToPrint
         $TextToPrint = '  DESCRIPTION ' + $object.description 
-        echo $TextToPrint
+        Write-Output $TextToPrint
         $TextToPrint = '  ::= { ' + $object.parent + ' ' + $object.ID + ' }'
-        echo $TextToPrint
-        echo ''
+        Write-Output $TextToPrint
+        Write-Output ''
       }
       elseif ($object.objectType -eq 'SEQUENCE') {
         $TextToPrint = $object.objectName + ' ::= SEQUENCE ' + $object.objects
-        echo $TextToPrint
-        echo ''
+        Write-Output $TextToPrint
+        Write-Output ''
       }
       elseif ($object.objectType -eq 'TEXTUAL-CONVENTION') {
         $TextToPrint = $object.objectName + ' ::= TEXTUAL-CONVENTION'
-        echo $TextToPrint
+        Write-Output $TextToPrint
         $TextToPrint = '  STATUS ' + $object.status 
-        echo $TextToPrint
+        Write-Output $TextToPrint
         $TextToPrint = '  DESCRIPTION ' + $object.description 
-        echo $TextToPrint
+        Write-Output $TextToPrint
         $TextToPrint = '  SYNTAX ' + $object.objectSyntax  
-        echo $TextToPrint 
-        echo ''
+        Write-Output $TextToPrint 
+        Write-Output ''
       }
       elseif ($object.objectType -eq 'TRAP-TYPE') {
         #Printing NOTIFICATION because we are converting to SMIv2
         $TextToPrint = $object.objectName + ' NOTIFICATION-TYPE' 
-        echo $TextToPrint
+        Write-Output $TextToPrint
         $TextToPrint = '  OBJECTS ' + $object.objects
-        echo $TextToPrint
+        Write-Output $TextToPrint
         $TextToPrint = '  STATUS ' + $object.status 
-        echo $TextToPrint
+        Write-Output $TextToPrint
         $TextToPrint = '  DESCRIPTION ' + $object.description 
-        echo $TextToPrint
+        Write-Output $TextToPrint
         $TextToPrint = '  ::= { ' + $object.parent + ' ' + $object.ID + ' }'
-        echo $TextToPrint
-        echo ''      
+        Write-Output $TextToPrint
+        Write-Output ''      
       }
       else {
         #Unknown or not implemented ObjectType
@@ -1959,3 +2209,17 @@ function ConvertTo-SMIv2 {
     }
   }
 }
+
+#VERSION HISTORY:
+#Version,Comment
+#20220326,CORRECTED: Is-BackwardsCompatible, was comparing the different types like OBJCET-TYPE with SEQUENCE
+#20220328,CORRECTED: Is-BackwardsCompatible, was looking for OID changed based on name also for OID less objects like SEQUENCE
+#20220331,ADDED: ConvertTo-SMIv1 now corretly generate BEGIN and END, and also conver MODULE-IDENTITY as OBJECT IDENTIFIER
+#20220417,CORRECTED: changed all aliase like echo, where, ls to it's proper names like Write-Output, Where-Object, Get-Childitem
+#20220508,CORRECTED: It seems that "object" names are Case sensitive hence must used -ceq instead of -eq when searching for objects during OID expantion/translation
+#20220617,CORRECTED: TEXTUAL-CONVENTION with direct SYNTAX processing, like those FcNameId ::= OCTET STRING (SIZE(8)), ADDED: Processing of MODULE-COMPLIANCE, but not fully implemented
+#20220620,CORRECTED: Is-BackwardsCompatible Condition for comparing(excluding) MODULE-COMPLIANCE
+#20220630,ADDED: DESCRIPTION processing inside MODULE-IDENTITY
+#20220704,ADDED: IMPORT record from each Module FROM which we import objects for easier dependecy check amd fatser compilation of multiple MIBs
+#20220706,ADDED: MACRO records to have all objects (for example: OBJECT-TYPE is defined by MACRO and is in imports hence need have those to properly cover IMPORTS), CORRECTED: TEXTUAL-CONVENTION Processing, CORRECTED: Update-OIDRepo to use -ceq (case sensitive comparision)
+#20220707,ADDED: In Import-MIB hardcoded iso = 1 cause for some IMPORTing standard object is too main stream, ADDED: info to debug output to know if running parsing or comment removal, CORRECTED: In Get-MIBInfo better more elegant imports output
